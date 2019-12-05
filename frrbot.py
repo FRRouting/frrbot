@@ -30,7 +30,7 @@ noautoclosemsg = "This issue will no longer be automatically closed."
 triggerlabel = "autoclose"
 
 pr_greeting_msg = "Thanks for your contribution to FRR!\n\n"
-pr_warn_signoff_msg = "* One of your commits is missing a `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
+pr_warn_signoff_msg = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
 pr_warn_blankln_msg = "* One of your commits does not have a blank line between the summary and body; this will break `git log --oneline`\n"
 pr_warn_commit_msg = (
     "* One of your commits has an improperly formatted commit message\n"
@@ -236,10 +236,17 @@ def patch_format(ghrepo, pr):
     repo.remotes["origin"].fetch(refspecs=[pr.base.sha])
     # fetch pr diff
     resp = requests.get(pr.diff_url)
-    diff = pygit2.Diff.parse_diff(resp.text)
+    if resp.status_code != 200:
+        app.logger.warning(
+            "[-] GET '{}' failed with HTTP {}".format(pr.diff_url, resp.status_code)
+        )
+        return None
+    if len(resp.text) == 0:
+        app.logger.warning("[-] diff at '{}' is empty".format(pr.diff_url))
+        return None
     dn = "/tmp/pr_{}.diff".format(pr.number)
     with open(dn, "w") as change:
-        change.write(diff.patch)
+        change.write(resp.text)
     # reset & apply
     repo.reset(pr.base.sha, pygit2.GIT_RESET_HARD)
     # compute format diff
@@ -320,6 +327,10 @@ def pull_request_opened(j):
     for commit in commits:
         msg = commit.commit.message
 
+        if len(msg) == 0:
+            app.logger.warning("[-] Zero length commit message; weird")
+            continue
+
         if msg.startswith("Revert") or msg.startswith("Merge"):
             continue
 
@@ -337,13 +348,14 @@ def pull_request_opened(j):
         else:
             warn_bad_msg = True
 
-        if not "Signed-off-by:" in msg:
+        if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
             warn_signoff = True
 
+    fmt_diff = None
     try:
         fmt_diff = patch_format(repo, pr)
     except:
-        app.logger.warning("Style diffing failed")
+        app.logger.warning("[-] Style diffing failed")
 
     comment = ""
     nak = False
