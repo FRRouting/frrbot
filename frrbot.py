@@ -19,6 +19,10 @@ import json
 import os
 import re
 import yaml
+import subprocess
+import pygit2
+import requests
+import time
 
 # Global data ------------------------------------------------------------------
 autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
@@ -209,6 +213,40 @@ def issue_comment_created(j):
     return Response("OK", 200)
 
 
+def patch_format(ghrepo, pr):
+    """
+    Compute a clang-format diff for a pull request.
+
+    Don't call this unless you have clang-format installed for git.
+    """
+    repodir = "my_frr"
+
+    # get repo
+    if not os.path.isdir(repodir):
+        pygit2.clone_repository(ghrepo.git_url, repodir)
+
+    repo = pygit2.Repository(repodir)
+    # fetch pr base
+    repo.remotes["origin"].fetch(refspecs=[pr.base.sha])
+    # fetch pr diff
+    resp = requests.get(pr.diff_url)
+    diff = pygit2.Diff.parse_diff(resp.text)
+    dn = "/tmp/pr_{}.diff".format(pr.number)
+    with open(dn, "w") as change:
+        change.write(diff.patch)
+    # reset & apply
+    repo.reset(pr.base.sha, pygit2.GIT_RESET_HARD)
+    # compute format diff
+    cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
+    subprocess.run(cmd)
+    cmd = "git -C {} add -u".format(repodir).split(" ")
+    subprocess.run(cmd)
+    cmd = "git -C {} clang-format --diff".format(repodir).split(" ")
+    result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
+    if result and not result.startswith(b"no modified files"):
+        return result.decode("utf-8")
+
+
 def pull_request_opened(j):
     """
     Handle a pull request being opened.
@@ -296,11 +334,23 @@ def pull_request_opened(j):
         if not "Signed-off-by:" in msg:
             warn_signoff = True
 
-    if warn_bad_msg or warn_signoff or warn_blankln:
+    try:
+        fmt_diff = patch_format(repo, pr)
+    except:
+        app.logger.warning("Style diffing failed")
+
+    if warn_bad_msg or warn_signoff or warn_blankln or fmt_diff:
         comment = pr_greeting_msg
         comment += pr_warn_commit_msg if warn_bad_msg else ""
         comment += pr_warn_signoff_msg if warn_signoff else ""
         comment += pr_warn_blankln_msg if warn_blankln else ""
+        comment += (
+            "\nYour patch has style issues. Suggested fix:\n```diff\n{}\n```\n".format(
+                fmt_diff
+            )
+            if fmt_diff is not None
+            else ""
+        )
         comment += pr_guidelines_ref_msg
         pr.create_review(body=comment, event="REQUEST_CHANGES")
 
