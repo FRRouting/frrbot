@@ -181,7 +181,11 @@ def issue_comment_created(j):
         next occurring May 15th.
         """
         if not (perm == "write" or perm == "admin"):
-            app.logger.warning("[-] User '{}' ({}) isn't authorized to use this command".format(sender, perm))
+            app.logger.warning(
+                "[-] User '{}' ({}) isn't authorized to use this command".format(
+                    sender, perm
+                )
+            )
             return
 
         closedate = dateparser.parse(arg)
@@ -200,7 +204,9 @@ def issue_comment_created(j):
         tp = "@{} {} ".format(my_user, verb)
         if tp.lower() in body.lower():
             partition = body.lower().partition(tp.lower())
-            app.logger.warning("[+] Trigger detected: {} {}".format(partition[1], partition[2]))
+            app.logger.warning(
+                "[+] Trigger detected: {} {}".format(partition[1], partition[2])
+            )
             verbs[verb](partition[2])
             had_verb = True
 
@@ -317,7 +323,7 @@ def pull_request_opened(j):
         if msg.startswith("Revert") or msg.startswith("Merge"):
             continue
 
-        if len(msg.split('\n')) < 2 or len(msg.split('\n')[1]) > 0:
+        if len(msg.split("\n")) < 2 or len(msg.split("\n")[1]) > 0:
             warn_blankln = True
 
         match = re.match(r"^([^:\n]+):", msg)
