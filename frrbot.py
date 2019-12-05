@@ -345,20 +345,28 @@ def pull_request_opened(j):
     except:
         app.logger.warning("Style diffing failed")
 
-    if warn_bad_msg or warn_signoff or warn_blankln or fmt_diff:
-        comment = pr_greeting_msg
-        comment += pr_warn_commit_msg if warn_bad_msg else ""
-        comment += pr_warn_signoff_msg if warn_signoff else ""
-        comment += pr_warn_blankln_msg if warn_blankln else ""
-        comment += (
-            "\nYour patch has style issues. Suggested fix:\n```diff\n{}\n```\n".format(
-                fmt_diff
-            )
-            if fmt_diff is not None
-            else ""
+    comment = ""
+    nak = False
+
+    if warn_bad_msg:
+        comment += pr_warn_commit_msg
+        nak = True
+    if warn_signoff:
+        comment += pr_warn_signoff_msg
+        nak = True
+    if warn_blankln:
+        comment += pr_warn_blankln_msg
+        nak = True
+    if fmt_diff:
+        comment += "\n* Your patch may have style issues. Suggested changes:\n```diff\n{}\n```\n".format(
+            fmt_diff
         )
+
+    if comment != "":
+        event = "REQUEST_CHANGES" if nak else "COMMENT"
+        comment = pr_greeting_msg + comment
         comment += pr_guidelines_ref_msg
-        pr.create_review(body=comment, event="REQUEST_CHANGES")
+        pr.create_review(body=comment, event=event)
 
     if labels:
         pr.add_to_labels(*labels)
