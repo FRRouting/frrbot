@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #
 # Deps:
-# pip3 install flask PyGithub apscheduler sqlalchemy dateparser
+# pip3 install flask PyGithub apscheduler sqlalchemy dateparser pygit2 requests
 #
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,6 +12,7 @@ from github import Github
 from github import GithubException
 from hmac import HMAC
 from werkzeug.exceptions import BadRequest
+from collections import defaultdict
 import dateparser
 import datetime
 import hmac
@@ -47,7 +48,7 @@ def close_issue(rn, num):
     issue.edit(state="closed")
     try:
         issue.remove_from_labels(triggerlabel)
-    except GithubException as e:
+    except GithubException:
         pass
 
 
@@ -219,21 +220,27 @@ def issue_comment_created(j):
     return Response("OK", 200)
 
 
-def patch_format(ghrepo, pr):
+def pr_check_format(ghrepo, pr):
     """
     Compute a clang-format diff for a pull request.
 
-    Don't call this unless you have clang-format installed for git.
+    Returns None if:
+    - the diff is empty (no style issues)
+    - any of the git operations fail
+    - git-clang-format isn't installed
+
+    Otherwise returns the style correction diff produced by clang-format.
     """
     repodir = "my_frr"
 
     # get repo
     if not os.path.isdir(repodir):
         pygit2.clone_repository(ghrepo.git_url, repodir)
-
     repo = pygit2.Repository(repodir)
+
     # fetch pr base
     repo.remotes["origin"].fetch(refspecs=[pr.base.sha])
+
     # fetch pr diff
     resp = requests.get(pr.diff_url)
     if resp.status_code != 200:
@@ -247,8 +254,10 @@ def patch_format(ghrepo, pr):
     dn = "/tmp/pr_{}.diff".format(pr.number)
     with open(dn, "w") as change:
         change.write(resp.text)
-    # reset & apply
+
+    # reset to PR base
     repo.reset(pr.base.sha, pygit2.GIT_RESET_HARD)
+
     # compute format diff
     cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
     subprocess.run(cmd)
@@ -260,27 +269,12 @@ def patch_format(ghrepo, pr):
         return result.decode("utf-8")
 
 
-def pull_request_opened(j):
+def pr_add_labels(pr):
     """
-    Handle a pull request being opened.
-
-    This function checks each commit's message for proper summary line
-    formatting, Signed-off-by, and modified directories. If it finds formatting
-    issues or missing Signed-off-by, it leaves a review on the PR asking for
-    the problem to be fixed.
-
-    Also, modified directories are extracted from commits and used to apply the
-    corresponding topic labels.
+    Label a pull request using component directories present in the commit
+    message subject lines.
     """
-    reponame = j["repository"]["full_name"]
-
-    repo = g.get_repo(reponame)
-    pr = repo.get_pull(j["number"])
-    commits = pr.get_commits()
-
-    labels = set()
-
-    # apply labels based on commit messages
+    # directory -> label
     label_map = {
         "babeld": "babel",
         "bfdd": "bfd",
@@ -320,9 +314,38 @@ def pull_request_opened(j):
         "bootstrap.sh": "build",
     }
 
-    warn_bad_msg = False
-    warn_signoff = False
-    warn_blankln = False
+    commits = pr.get_commits()
+    labels = set()
+
+    for commit in commits:
+        msg = commit.commit.message
+        match = re.match(r"^([^:\n]+):", msg)
+        if match:
+            lbls = match.groups()[0].split(",")
+            lbls = map(lambda x: x.strip(), lbls)
+            lbls = map(lambda x: x.lower(), lbls)
+            lbls = filter(lambda x: x in label_map, lbls)
+            lbls = map(lambda x: label_map[x], lbls)
+            labels = labels | set(lbls)
+
+    if labels:
+        pr.add_to_labels(*labels)
+
+
+def pr_check_commit_messages(pr):
+    """
+    For each commit in the PR, check for the following:
+
+    - incorrect summary line formatting
+    - missing DCOO / Signed-off-by line
+    - missing blank line between summary line and message body
+
+    Returns a dict indicating whether each of the above is true for any commit
+    in the PR.
+    """
+    commits = pr.get_commits()
+
+    warns = defaultdict(bool)
 
     for commit in commits:
         msg = commit.commit.message
@@ -334,44 +357,57 @@ def pull_request_opened(j):
         if msg.startswith("Revert") or msg.startswith("Merge"):
             continue
 
-        if len(msg.split("\n")) < 2 or len(msg.split("\n")[1]) > 0:
-            warn_blankln = True
+        lines = msg.split("\n")
 
-        match = re.match(r"^([^:\n]+):", msg)
-        if match:
-            lbls = map(lambda x: x.strip(), match.groups()[0].split(","))
-            lbls = map(lambda x: x.lower(), lbls)
-            lbls = filter(lambda x: x in label_map, lbls)
-            lbls = map(lambda x: label_map[x], lbls)
-            lbls = set(lbls)
-            labels = labels | lbls
-        else:
-            warn_bad_msg = True
+        if len(lines) < 2 or len(lines[1]) > 0:
+            warns["blankln"] = True
+
+        if ":" not in lines[0]:
+            warns["bad_msg"] = True
 
         if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
-            warn_signoff = True
+            warns["signoff"] = True
 
-    fmt_diff = None
+    return warns
+
+
+def pull_request_opened(j):
+    """
+    Handle a pull request being opened.
+
+    - Check commit messages for proper formatting
+    - Check patch for potential style issues
+    - Add component labels
+
+    If any of the checks fail, a review is submitted indicating the issues.
+    """
+    repo = g.get_repo(j["repository"]["full_name"])
+    pr = repo.get_pull(j["number"])
+
+    pr_add_labels(pr)
+
+    warnings = pr_check_commit_messages(pr)
+    style = None
     try:
-        fmt_diff = patch_format(repo, pr)
+        style = pr_check_format(repo, pr)
     except:
-        app.logger.warning("[-] Style diffing failed")
+        app.logger.warning("[-] Style checking failed")
 
     comment = ""
     nak = False
 
-    if warn_bad_msg:
+    if warnings["bad_msg"]:
         comment += pr_warn_commit_msg
         nak = True
-    if warn_signoff:
+    if warnings["signoff"]:
         comment += pr_warn_signoff_msg
         nak = True
-    if warn_blankln:
+    if warnings["blankln"]:
         comment += pr_warn_blankln_msg
         nak = True
-    if fmt_diff:
+    if style:
         comment += "\n* Your patch may have style issues. Suggested changes:\n```diff\n{}\n```\n".format(
-            fmt_diff
+            style
         )
 
     if comment != "":
@@ -379,9 +415,6 @@ def pull_request_opened(j):
         comment = pr_greeting_msg + comment
         comment += pr_guidelines_ref_msg
         pr.create_review(body=comment, event=event)
-
-    if labels:
-        pr.add_to_labels(*labels)
 
     return Response("OK", 200)
 
