@@ -101,7 +101,7 @@ print("[+] Github webhook secret: {}".format(whsec))
 
 # Initialize GitHub API
 g = Github(auth)
-my_user = g.get_user().login
+my_user = g.get_user()
 print("[+] Initialized GitHub API object")
 
 # Initialize scheduler
@@ -202,7 +202,7 @@ def issue_comment_created(j):
     had_verb = False
 
     for verb in verbs.keys():
-        tp = "@{} {} ".format(my_user, verb)
+        tp = "@{} {} ".format(my_user.login, verb)
         if tp.lower() in body.lower():
             partition = body.lower().partition(tp.lower())
             app.logger.warning(
@@ -371,21 +371,7 @@ def pr_check_commit_messages(pr):
     return warns
 
 
-def pull_request_opened(j):
-    """
-    Handle a pull request being opened.
-
-    - Check commit messages for proper formatting
-    - Check patch for potential style issues
-    - Add component labels
-
-    If any of the checks fail, a review is submitted indicating the issues.
-    """
-    repo = g.get_repo(j["repository"]["full_name"])
-    pr = repo.get_pull(j["number"])
-
-    pr_add_labels(pr)
-
+def pr_review(repo, pr):
     warnings = pr_check_commit_messages(pr)
     style = None
     try:
@@ -411,12 +397,69 @@ def pull_request_opened(j):
         )
 
     if comment != "":
-        event = "REQUEST_CHANGES" if nak else "COMMENT"
         comment = pr_greeting_msg + comment
         comment += pr_guidelines_ref_msg
-        pr.create_review(body=comment, event=event)
+
+    result = {
+        "ok": not nak,
+        "comment": comment if comment != "" else None,
+    }
+
+    return result
+
+
+def pull_request_opened(j):
+    """
+    Handle a pull request being opened.
+
+    - Add component labels
+    - Review pull request for basic correctness
+
+    If any issues are found, a review is submitted indicating the issues.
+    """
+    repo = g.get_repo(j["repository"]["full_name"])
+    pr = repo.get_pull(j["number"])
+
+    pr_add_labels(pr)
+
+    review = pr_review(repo, pr)
+
+    if review["comment"] is not None:
+        event = "COMMENT" if review["ok"] else "REQUEST_CHANGES"
+        pr.create_review(body=review["comment"], event=event)
 
     return Response("OK", 200)
+
+
+def pull_request_synchronize(j):
+    """
+    Handle a pull request being synchronized.
+
+    Synchronized means new commits were pushed to the branch tracked by the PR.
+
+    - Add component labels
+    - Review pull request for basic correctness
+
+    If any issues are found, a review is submitted indicating the issues.
+    If prior issues have been resolved, the previous review is dismissed.
+    """
+    repo = g.get_repo(j["repository"]["full_name"])
+    pr = repo.get_pull(j["number"])
+
+    pr_add_labels(pr)
+
+    review = pr_review(repo, pr)
+
+    if review["ok"]:
+        for review in pr.get_reviews():
+            if review.user.id == my_user.id:
+                review.dismiss()
+
+    if review["comment"] is not None:
+        event = "COMMENT" if review["ok"] else "REQUEST_CHANGES"
+        pr.create_review(body=review["comment"], event=event)
+
+    return pull_request_opened(j)
 
 
 # API handler map
@@ -435,7 +478,10 @@ def pull_request_opened(j):
 event_handlers = {
     "issues": {"labeled": issue_labeled},
     "issue_comment": {"created": issue_comment_created},
-    "pull_request": {"opened": pull_request_opened},
+    "pull_request": {
+        "opened": pull_request_opened,
+        "synchronize": pull_request_synchronize,
+    },
 }
 
 
@@ -476,7 +522,7 @@ def handle_webhook(request):
         sender = j["sender"]["login"]
         reponame = j["repository"]["full_name"]
         repo = g.get_repo(reponame)
-        if sender == my_user:
+        if sender == my_user.login:
             app.logger.warning("[+] Ignoring event triggered by me")
             return Response("OK", 200)
     except KeyError as e:
