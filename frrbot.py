@@ -236,10 +236,6 @@ def pr_check_format(ghrepo, pr):
     # get repo
     if not os.path.isdir(repodir):
         pygit2.clone_repository(ghrepo.git_url, repodir)
-    repo = pygit2.Repository(repodir)
-
-    # fetch pr base
-    repo.remotes["origin"].fetch(refspecs=[pr.base.sha])
 
     # fetch pr diff
     resp = requests.get(pr.diff_url)
@@ -255,18 +251,26 @@ def pr_check_format(ghrepo, pr):
     with open(dn, "w") as change:
         change.write(resp.text)
 
-    # reset to PR base
-    repo.reset(pr.base.sha, pygit2.GIT_RESET_HARD)
-
-    # compute format diff
+    app.logger.warning("[+] Fetching {}".format(pr.base.sha))
+    cmd = "git -C {} fetch origin {}".format(repodir, pr.base.sha).split(" ")
+    subprocess.run(cmd)
+    app.logger.warning("[+] Resetting to {}".format(pr.base.sha))
+    cmd = "git -C {} reset --hard {}".format(repodir, pr.base.sha).split(" ")
+    subprocess.run(cmd)
+    app.logger.warning("[+] Applying patch")
     cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
     subprocess.run(cmd)
+    app.logger.warning("[+] Staging patch")
     cmd = "git -C {} add -u".format(repodir).split(" ")
     subprocess.run(cmd)
+    app.logger.warning("[+] Generating style diff")
     cmd = "git -C {} clang-format --diff".format(repodir).split(" ")
     result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
-    if result and not result.startswith(b"no modified files"):
-        return result.decode("utf-8")
+
+    app.logger.warning("[+] Result: {}".format(result))
+    result = result.decode("utf-8") if result is not None else result
+    if result and "did not modify" not in result and "no modified files" not in result:
+        return result
 
 
 def pr_add_labels(pr):
@@ -373,11 +377,14 @@ def pr_check_commit_messages(pr):
 
 def pr_review(repo, pr):
     warnings = pr_check_commit_messages(pr)
+
+    app.logger.warning("[+] Reviewing {}".format(pr.number))
+
     style = None
     try:
         style = pr_check_format(repo, pr)
-    except:
-        app.logger.warning("[-] Style checking failed")
+    except Exception as e:
+        app.logger.warning("[-] Style checking failed:\n" + str(e))
 
     comment = ""
     nak = False
@@ -451,15 +458,15 @@ def pull_request_synchronize(j):
     review = pr_review(repo, pr)
 
     if review["ok"]:
-        for review in pr.get_reviews():
-            if review.user.id == my_user.id:
-                review.dismiss()
+        for r in pr.get_reviews():
+            if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
+                r.dismiss("blocking comments addressed")
 
     if review["comment"] is not None:
         event = "COMMENT" if review["ok"] else "REQUEST_CHANGES"
         pr.create_review(body=review["comment"], event=event)
 
-    return pull_request_opened(j)
+    return Response("OK", 200)
 
 
 # API handler map
@@ -520,8 +527,6 @@ def handle_webhook(request):
 
     try:
         sender = j["sender"]["login"]
-        reponame = j["repository"]["full_name"]
-        repo = g.get_repo(reponame)
         if sender == my_user.login:
             app.logger.warning("[+] Ignoring event triggered by me")
             return Response("OK", 200)
