@@ -10,6 +10,7 @@ from flask import Response
 from flask import request
 from github import Github
 from github import GithubException
+from github import InputFileContent
 from hmac import HMAC
 from werkzeug.exceptions import BadRequest
 from collections import defaultdict
@@ -399,20 +400,53 @@ def pr_review(repo, pr):
         comment += pr_warn_blankln_msg
         nak = True
     if style:
-        comment += "\n* Your patch may have style issues. Suggested changes:\n```diff\n{}\n```\n".format(
-            style
-        )
+        try:
+            gistname = "cr_{}_{}.diff".format(pr.number, int(time.time()))
+            files = {gistname: InputFileContent(style)}
+            gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(pr.number))
+            raw_url = gist.files[gistname].raw_url
+            comment += """
+<details>
+<summary><b>Click for style suggestions</b></summary>
 
+To apply these suggestions:
+
+<p>
+
+```
+curl -s {gisturl} | git apply
+```
+
+</p>
+
+<p>
+
+```diff
+{stylediff}
+```
+
+</p>
+</details>
+
+""".format(gisturl=raw_url, stylediff=style)
+        except Exception as e:
+            app.logger.warning("[-] Failed to create gist: ")
+            app.logger.warning(e)
+
+    # dismiss previous reviews if necessary
+    if not nak:
+        for r in pr.get_reviews():
+            if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
+                r.dismiss("blocking comments addressed")
+
+    # Post review
     if comment != "":
         comment = pr_greeting_msg + comment
         comment += pr_guidelines_ref_msg
+        event = "COMMENT" if not nak else "REQUEST_CHANGES"
+        pr.create_review(body=comment, event=event)
 
-    result = {
-        "ok": not nak,
-        "comment": comment if comment != "" else None,
-    }
-
-    return result
+    return comment
 
 
 def pull_request_opened(j):
@@ -429,11 +463,7 @@ def pull_request_opened(j):
 
     pr_add_labels(pr)
 
-    review = pr_review(repo, pr)
-
-    if review["comment"] is not None:
-        event = "COMMENT" if review["ok"] else "REQUEST_CHANGES"
-        pr.create_review(body=review["comment"], event=event)
+    pr_review(repo, pr)
 
     return Response("OK", 200)
 
@@ -455,16 +485,7 @@ def pull_request_synchronize(j):
 
     pr_add_labels(pr)
 
-    review = pr_review(repo, pr)
-
-    if review["ok"]:
-        for r in pr.get_reviews():
-            if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
-                r.dismiss("blocking comments addressed")
-
-    if review["comment"] is not None:
-        event = "COMMENT" if review["ok"] else "REQUEST_CHANGES"
-        pr.create_review(body=review["comment"], event=event)
+    pr_review(repo, pr)
 
     return Response("OK", 200)
 
