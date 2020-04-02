@@ -234,6 +234,13 @@ def pr_check_format(ghrepo, pr):
     """
     repodir = "my_frr"
 
+    ignore = [
+        "ldpd",
+        "babeld",
+        "nhrpd",
+        "eigrpd",
+    ]
+
     # get repo
     if not os.path.isdir(repodir):
         pygit2.clone_repository(ghrepo.git_url, repodir)
@@ -260,6 +267,9 @@ def pr_check_format(ghrepo, pr):
     subprocess.run(cmd)
     app.logger.warning("[+] Applying patch")
     cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
+    subprocess.run(cmd)
+    app.logger.warning("[+] Applying ignore rules")
+    cmd = "git -C {} checkout -- {}".format(repodir, " ".join(ignore)).split(" ")
     subprocess.run(cmd)
     app.logger.warning("[+] Staging patch")
     cmd = "git -C {} add -u".format(repodir).split(" ")
