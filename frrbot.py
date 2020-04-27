@@ -30,6 +30,7 @@ import time
 autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
 noautoclosemsg = "This issue will no longer be automatically closed."
 triggerlabel = "autoclose"
+banned_functions = [("sprintf", "snprintf"), ("strcat", "strlcat"), ("strcpy", "strlcpy")]
 
 pr_greeting_msg = "Thanks for your contribution to FRR!\n\n"
 pr_warn_signoff_msg = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
@@ -37,6 +38,7 @@ pr_warn_blankln_msg = "* One of your commits does not have a blank line between 
 pr_warn_commit_msg = (
     "* One of your commits has an improperly formatted commit message\n"
 )
+pr_warn_banned_functions = "* `{}` are banned; please use `{}`\n".format(', '.join([x[0] for x in banned_functions]), ', '.join([x[1] for x in banned_functions]))
 pr_guidelines_ref_msg = "\nIf you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).\n"
 
 # Scheduler functions ----------------------------------------------------------
@@ -228,6 +230,114 @@ class FrrPullRequest(object):
         return warns
 
 
+    def check_functions(self):
+        resp = requests.get(self.pr.diff_url)
+        if resp.status_code != 200:
+            app.logger.warning(
+                "[-] GET '{}' failed with HTTP {}".format(self.pr.diff_url, resp.status_code)
+            )
+            return None
+        if len(resp.text) == 0:
+            app.logger.warning("[-] diff at '{}' is empty".format(self.pr.diff_url))
+            return None
+
+        added = [x for x in resp.text.split("\n") if x.startswith("+")]
+        banned = [x[0] for x in banned_functions]
+        has_banned_functions = any([any([y in x for y in banned]) for x in added])
+
+        return has_banned_functions
+
+
+    def check(self):
+        issues = defaultdict(lambda: None)
+
+        issues["commits"] = self.check_commits()
+
+        try:
+            issues["style"] = self.check_format()
+        except Exception as e:
+            app.logger.warning("[-] Style checking failed:\n" + str(e))
+
+        try:
+            issues["functions"] = self.check_functions()
+        except Exception as e:
+            app.logger.warning("[-] Function checking failed:\n" + str(e))
+
+        return issues
+
+
+    def review(self):
+        issues = self.check()
+
+        app.logger.warning("[+] Reviewing {}".format(self.pr.number))
+
+        comment = ""
+        nak = False
+
+        if issues["commits"]:
+            if issues["commits"]["bad_msg"]:
+                comment += pr_warn_commit_msg
+                nak = True
+            if issues["commits"]["signoff"]:
+                comment += pr_warn_signoff_msg
+                nak = True
+            if issues["commits"]["blankln"]:
+                comment += pr_warn_blankln_msg
+                nak = True
+        if issues["functions"]:
+            comment += pr_warn_banned_functions
+            nak = True
+        if issues["style"]:
+            try:
+                gistname = "cr_{}_{}.diff".format(self.pr.number, int(time.time()))
+                files = {gistname: InputFileContent(issues["style"])}
+                gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(self.pr.number))
+                raw_url = gist.files[gistname].raw_url
+                comment += """
+<details>
+<summary><b>Click for style suggestions</b></summary>
+
+To apply these suggestions:
+
+<p>
+
+```
+curl -s {gisturl} | git apply
+```
+
+</p>
+
+<p>
+
+```diff
+{stylediff}
+```
+
+</p>
+</details>
+
+            """.format(gisturl=raw_url, stylediff=issues["style"])
+
+            except Exception as e:
+                app.logger.warning("[-] Failed to create gist: ")
+                app.logger.warning(e)
+
+        # dismiss previous reviews if necessary
+        if not nak:
+            for r in self.pr.get_reviews():
+                if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
+                    r.dismiss("blocking comments addressed")
+
+        # Post review
+        if comment != "":
+            comment = pr_greeting_msg + comment
+            comment += pr_guidelines_ref_msg
+            event = "COMMENT" if not nak else "REQUEST_CHANGES"
+            self.pr.create_review(body=comment, event=event)
+
+        return comment
+
+
     def add_labels(self):
         """
         Label a pull request using component directories present in the commit
@@ -289,79 +399,6 @@ class FrrPullRequest(object):
 
         if labels:
             self.pr.add_to_labels(*labels)
-
-
-    def review(self):
-        warnings = self.check_commits()
-
-        app.logger.warning("[+] Reviewing {}".format(self.pr.number))
-
-        style = None
-        try:
-            style = self.check_format()
-        except Exception as e:
-            app.logger.warning("[-] Style checking failed:\n" + str(e))
-
-        comment = ""
-        nak = False
-
-        if warnings["bad_msg"]:
-            comment += pr_warn_commit_msg
-            nak = True
-        if warnings["signoff"]:
-            comment += pr_warn_signoff_msg
-            nak = True
-        if warnings["blankln"]:
-            comment += pr_warn_blankln_msg
-            nak = True
-        if style:
-            try:
-                gistname = "cr_{}_{}.diff".format(self.pr.number, int(time.time()))
-                files = {gistname: InputFileContent(style)}
-                gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(self.pr.number))
-                raw_url = gist.files[gistname].raw_url
-                comment += """
-<details>
-<summary><b>Click for style suggestions</b></summary>
-
-To apply these suggestions:
-
-<p>
-
-```
-curl -s {gisturl} | git apply
-```
-
-</p>
-
-<p>
-
-```diff
-{stylediff}
-```
-
-</p>
-</details>
-
-    """.format(gisturl=raw_url, stylediff=style)
-            except Exception as e:
-                app.logger.warning("[-] Failed to create gist: ")
-                app.logger.warning(e)
-
-        # dismiss previous reviews if necessary
-        if not nak:
-            for r in self.pr.get_reviews():
-                if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
-                    r.dismiss("blocking comments addressed")
-
-        # Post review
-        if comment != "":
-            comment = pr_greeting_msg + comment
-            comment += pr_guidelines_ref_msg
-            event = "COMMENT" if not nak else "REQUEST_CHANGES"
-            self.pr.create_review(body=comment, event=event)
-
-        return comment
 
 
 
