@@ -30,7 +30,11 @@ import time
 autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
 noautoclosemsg = "This issue will no longer be automatically closed."
 triggerlabel = "autoclose"
-banned_functions = [("sprintf", "snprintf"), ("strcat", "strlcat"), ("strcpy", "strlcpy")]
+banned_functions = [
+    ("sprintf", "snprintf"),
+    ("strcat", "strlcat"),
+    ("strcpy", "strlcpy"),
+]
 
 pr_greeting_msg = "Thanks for your contribution to FRR!\n\n"
 pr_warn_signoff_msg = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
@@ -38,7 +42,10 @@ pr_warn_blankln_msg = "* One of your commits does not have a blank line between 
 pr_warn_commit_msg = (
     "* One of your commits has an improperly formatted commit message\n"
 )
-pr_warn_banned_functions = "* `{}` are banned; please use `{}`\n".format(', '.join([x[0] for x in banned_functions]), ', '.join([x[1] for x in banned_functions]))
+pr_warn_banned_functions = "* `{}` are banned; please use `{}`\n".format(
+    ", ".join([x[0] for x in banned_functions]),
+    ", ".join([x[1] for x in banned_functions]),
+)
 pr_guidelines_ref_msg = "\nIf you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).\n"
 
 # Scheduler functions ----------------------------------------------------------
@@ -122,11 +129,11 @@ print("[+] Initialized Flask app")
 
 # Pull request management ------------------------------------------------------
 
+
 class FrrPullRequest(object):
     def __init__(self, repo, pr):
         self.repo = repo
         self.pr = pr
-
 
     def check_format(self):
         """
@@ -141,12 +148,7 @@ class FrrPullRequest(object):
         """
         repodir = "my_frr"
 
-        ignore = [
-            "ldpd",
-            "babeld",
-            "nhrpd",
-            "eigrpd",
-        ]
+        ignore = ["ldpd", "babeld", "nhrpd", "eigrpd"]
 
         # get repo
         if not os.path.isdir(repodir):
@@ -156,7 +158,9 @@ class FrrPullRequest(object):
         resp = requests.get(self.pr.diff_url)
         if resp.status_code != 200:
             app.logger.warning(
-                "[-] GET '{}' failed with HTTP {}".format(self.pr.diff_url, resp.status_code)
+                "[-] GET '{}' failed with HTTP {}".format(
+                    self.pr.diff_url, resp.status_code
+                )
             )
             return None
         if len(resp.text) == 0:
@@ -187,9 +191,12 @@ class FrrPullRequest(object):
 
         app.logger.warning("[+] Result: {}".format(result))
         result = result.decode("utf-8") if result is not None else result
-        if result and "did not modify" not in result and "no modified files" not in result:
+        if (
+            result
+            and "did not modify" not in result
+            and "no modified files" not in result
+        ):
             return result
-
 
     def check_commits(self):
         """
@@ -229,12 +236,13 @@ class FrrPullRequest(object):
 
         return warns
 
-
     def check_functions(self):
         resp = requests.get(self.pr.diff_url)
         if resp.status_code != 200:
             app.logger.warning(
-                "[-] GET '{}' failed with HTTP {}".format(self.pr.diff_url, resp.status_code)
+                "[-] GET '{}' failed with HTTP {}".format(
+                    self.pr.diff_url, resp.status_code
+                )
             )
             return None
         if len(resp.text) == 0:
@@ -246,7 +254,6 @@ class FrrPullRequest(object):
         has_banned_functions = any([any([y in x for y in banned]) for x in added])
 
         return has_banned_functions
-
 
     def check(self):
         issues = defaultdict(lambda: None)
@@ -264,7 +271,6 @@ class FrrPullRequest(object):
             app.logger.warning("[-] Function checking failed:\n" + str(e))
 
         return issues
-
 
     def review(self):
         issues = self.check()
@@ -291,7 +297,9 @@ class FrrPullRequest(object):
             try:
                 gistname = "cr_{}_{}.diff".format(self.pr.number, int(time.time()))
                 files = {gistname: InputFileContent(issues["style"])}
-                gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(self.pr.number))
+                gist = my_user.create_gist(
+                    True, files, "FRRouting/frr #{}".format(self.pr.number)
+                )
                 raw_url = gist.files[gistname].raw_url
                 comment += """
 <details>
@@ -316,7 +324,9 @@ curl -s {gisturl} | git apply
 </p>
 </details>
 
-            """.format(gisturl=raw_url, stylediff=issues["style"])
+            """.format(
+                    gisturl=raw_url, stylediff=issues["style"]
+                )
 
             except Exception as e:
                 app.logger.warning("[-] Failed to create gist: ")
@@ -336,7 +346,6 @@ curl -s {gisturl} | git apply
             self.pr.create_review(body=comment, event=event)
 
         return comment
-
 
     def add_labels(self):
         """
@@ -399,7 +408,6 @@ curl -s {gisturl} | git apply
 
         if labels:
             self.pr.add_to_labels(*labels)
-
 
 
 # Webhook handlers -------------------------------------------------------------
@@ -504,7 +512,6 @@ def issue_comment_created(j):
         issue.create_comment(noautoclosemsg)
 
     return Response("OK", 200)
-
 
 
 def pull_request_opened(j):
