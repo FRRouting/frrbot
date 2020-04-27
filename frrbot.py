@@ -117,6 +117,254 @@ scheduler.print_jobs()
 app = Flask(__name__)
 print("[+] Initialized Flask app")
 
+
+# Pull request management ------------------------------------------------------
+
+class FrrPullRequest(object):
+    def __init__(self, repo, pr):
+        self.repo = repo
+        self.pr = pr
+
+
+    def check_format(self):
+        """
+        Compute a clang-format diff for a pull request.
+
+        Returns None if:
+        - the diff is empty (no style issues)
+        - any of the git operations fail
+        - git-clang-format isn't installed
+
+        Otherwise returns the style correction diff produced by clang-format.
+        """
+        repodir = "my_frr"
+
+        ignore = [
+            "ldpd",
+            "babeld",
+            "nhrpd",
+            "eigrpd",
+        ]
+
+        # get repo
+        if not os.path.isdir(repodir):
+            pygit2.clone_repository(self.repo.git_url, repodir)
+
+        # fetch pr diff
+        resp = requests.get(self.pr.diff_url)
+        if resp.status_code != 200:
+            app.logger.warning(
+                "[-] GET '{}' failed with HTTP {}".format(self.pr.diff_url, resp.status_code)
+            )
+            return None
+        if len(resp.text) == 0:
+            app.logger.warning("[-] diff at '{}' is empty".format(self.pr.diff_url))
+            return None
+        dn = "/tmp/pr_{}.diff".format(self.pr.number)
+        with open(dn, "w") as change:
+            change.write(resp.text)
+
+        app.logger.warning("[+] Fetching {}".format(self.pr.base.sha))
+        cmd = "git -C {} fetch origin {}".format(repodir, self.pr.base.sha).split(" ")
+        subprocess.run(cmd)
+        app.logger.warning("[+] Resetting to {}".format(self.pr.base.sha))
+        cmd = "git -C {} reset --hard {}".format(repodir, self.pr.base.sha).split(" ")
+        subprocess.run(cmd)
+        app.logger.warning("[+] Applying patch")
+        cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
+        subprocess.run(cmd)
+        app.logger.warning("[+] Applying ignore rules")
+        cmd = "git -C {} checkout -- {}".format(repodir, " ".join(ignore)).split(" ")
+        subprocess.run(cmd)
+        app.logger.warning("[+] Staging patch")
+        cmd = "git -C {} add -u".format(repodir).split(" ")
+        subprocess.run(cmd)
+        app.logger.warning("[+] Generating style diff")
+        cmd = "git -C {} clang-format --diff".format(repodir).split(" ")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
+
+        app.logger.warning("[+] Result: {}".format(result))
+        result = result.decode("utf-8") if result is not None else result
+        if result and "did not modify" not in result and "no modified files" not in result:
+            return result
+
+
+    def check_commits(self):
+        """
+        For each commit in the PR, check for the following:
+
+        - incorrect summary line formatting
+        - missing DCOO / Signed-off-by line
+        - missing blank line between summary line and message body
+
+        Returns a dict indicating whether each of the above is true for any commit
+        in the PR.
+        """
+        commits = self.pr.get_commits()
+
+        warns = defaultdict(bool)
+
+        for commit in commits:
+            msg = commit.commit.message
+
+            if len(msg) == 0:
+                app.logger.warning("[-] Zero length commit message; weird")
+                continue
+
+            if msg.startswith("Revert") or msg.startswith("Merge"):
+                continue
+
+            lines = msg.split("\n")
+
+            if len(lines) < 2 or len(lines[1]) > 0:
+                warns["blankln"] = True
+
+            if ":" not in lines[0]:
+                warns["bad_msg"] = True
+
+            if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
+                warns["signoff"] = True
+
+        return warns
+
+
+    def add_labels(self):
+        """
+        Label a pull request using component directories present in the commit
+        message subject lines.
+        """
+        # directory -> label
+        label_map = {
+            "babeld": "babel",
+            "bfdd": "bfd",
+            "bgpd": "bgp",
+            "debian": "packaging",
+            "doc": "documentation",
+            "docker": "docker",
+            "eigrpd": "eigrp",
+            "fpm": "fpm",
+            "isisd": "isis",
+            "ldpd": "ldp",
+            "lib": "libfrr",
+            "nhrpd": "nhrp",
+            "ospf6d": "ospfv3",
+            "ospfd": "ospf",
+            "pbrd": "pbr",
+            "pimd": "pim",
+            "pkgsrc": "packaging",
+            "python": "clippy",
+            "redhat": "packaging",
+            "ripd": "rip",
+            "ripngd": "ripng",
+            "sharpd": "sharp",
+            "snapcraft": "packaging",
+            "solaris": "packaging",
+            "staticd": "staticd",
+            "tests": "tests",
+            "tools": "tools",
+            "vtysh": "vtysh",
+            "vrrpd": "vrrp",
+            "watchfrr": "watchfrr",
+            "yang": "yang",
+            "zebra": "zebra",
+            # files
+            "configure.ac": "build",
+            "makefile.am": "build",
+            "bootstrap.sh": "build",
+        }
+
+        commits = self.pr.get_commits()
+        labels = set()
+
+        for commit in commits:
+            msg = commit.commit.message
+            match = re.match(r"^([^:\n]+):", msg)
+            if match:
+                lbls = match.groups()[0].split(",")
+                lbls = map(lambda x: x.strip(), lbls)
+                lbls = map(lambda x: x.lower(), lbls)
+                lbls = filter(lambda x: x in label_map, lbls)
+                lbls = map(lambda x: label_map[x], lbls)
+                labels = labels | set(lbls)
+
+        if labels:
+            self.pr.add_to_labels(*labels)
+
+
+    def review(self):
+        warnings = self.check_commits()
+
+        app.logger.warning("[+] Reviewing {}".format(self.pr.number))
+
+        style = None
+        try:
+            style = self.check_format()
+        except Exception as e:
+            app.logger.warning("[-] Style checking failed:\n" + str(e))
+
+        comment = ""
+        nak = False
+
+        if warnings["bad_msg"]:
+            comment += pr_warn_commit_msg
+            nak = True
+        if warnings["signoff"]:
+            comment += pr_warn_signoff_msg
+            nak = True
+        if warnings["blankln"]:
+            comment += pr_warn_blankln_msg
+            nak = True
+        if style:
+            try:
+                gistname = "cr_{}_{}.diff".format(self.pr.number, int(time.time()))
+                files = {gistname: InputFileContent(style)}
+                gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(self.pr.number))
+                raw_url = gist.files[gistname].raw_url
+                comment += """
+<details>
+<summary><b>Click for style suggestions</b></summary>
+
+To apply these suggestions:
+
+<p>
+
+```
+curl -s {gisturl} | git apply
+```
+
+</p>
+
+<p>
+
+```diff
+{stylediff}
+```
+
+</p>
+</details>
+
+    """.format(gisturl=raw_url, stylediff=style)
+            except Exception as e:
+                app.logger.warning("[-] Failed to create gist: ")
+                app.logger.warning(e)
+
+        # dismiss previous reviews if necessary
+        if not nak:
+            for r in self.pr.get_reviews():
+                if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
+                    r.dismiss("blocking comments addressed")
+
+        # Post review
+        if comment != "":
+            comment = pr_greeting_msg + comment
+            comment += pr_guidelines_ref_msg
+            event = "COMMENT" if not nak else "REQUEST_CHANGES"
+            self.pr.create_review(body=comment, event=event)
+
+        return comment
+
+
+
 # Webhook handlers -------------------------------------------------------------
 
 
@@ -221,243 +469,6 @@ def issue_comment_created(j):
     return Response("OK", 200)
 
 
-def pr_check_format(ghrepo, pr):
-    """
-    Compute a clang-format diff for a pull request.
-
-    Returns None if:
-    - the diff is empty (no style issues)
-    - any of the git operations fail
-    - git-clang-format isn't installed
-
-    Otherwise returns the style correction diff produced by clang-format.
-    """
-    repodir = "my_frr"
-
-    ignore = [
-        "ldpd",
-        "babeld",
-        "nhrpd",
-        "eigrpd",
-    ]
-
-    # get repo
-    if not os.path.isdir(repodir):
-        pygit2.clone_repository(ghrepo.git_url, repodir)
-
-    # fetch pr diff
-    resp = requests.get(pr.diff_url)
-    if resp.status_code != 200:
-        app.logger.warning(
-            "[-] GET '{}' failed with HTTP {}".format(pr.diff_url, resp.status_code)
-        )
-        return None
-    if len(resp.text) == 0:
-        app.logger.warning("[-] diff at '{}' is empty".format(pr.diff_url))
-        return None
-    dn = "/tmp/pr_{}.diff".format(pr.number)
-    with open(dn, "w") as change:
-        change.write(resp.text)
-
-    app.logger.warning("[+] Fetching {}".format(pr.base.sha))
-    cmd = "git -C {} fetch origin {}".format(repodir, pr.base.sha).split(" ")
-    subprocess.run(cmd)
-    app.logger.warning("[+] Resetting to {}".format(pr.base.sha))
-    cmd = "git -C {} reset --hard {}".format(repodir, pr.base.sha).split(" ")
-    subprocess.run(cmd)
-    app.logger.warning("[+] Applying patch")
-    cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
-    subprocess.run(cmd)
-    app.logger.warning("[+] Applying ignore rules")
-    cmd = "git -C {} checkout -- {}".format(repodir, " ".join(ignore)).split(" ")
-    subprocess.run(cmd)
-    app.logger.warning("[+] Staging patch")
-    cmd = "git -C {} add -u".format(repodir).split(" ")
-    subprocess.run(cmd)
-    app.logger.warning("[+] Generating style diff")
-    cmd = "git -C {} clang-format --diff".format(repodir).split(" ")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
-
-    app.logger.warning("[+] Result: {}".format(result))
-    result = result.decode("utf-8") if result is not None else result
-    if result and "did not modify" not in result and "no modified files" not in result:
-        return result
-
-
-def pr_add_labels(pr):
-    """
-    Label a pull request using component directories present in the commit
-    message subject lines.
-    """
-    # directory -> label
-    label_map = {
-        "babeld": "babel",
-        "bfdd": "bfd",
-        "bgpd": "bgp",
-        "debian": "packaging",
-        "doc": "documentation",
-        "docker": "docker",
-        "eigrpd": "eigrp",
-        "fpm": "fpm",
-        "isisd": "isis",
-        "ldpd": "ldp",
-        "lib": "libfrr",
-        "nhrpd": "nhrp",
-        "ospf6d": "ospfv3",
-        "ospfd": "ospf",
-        "pbrd": "pbr",
-        "pimd": "pim",
-        "pkgsrc": "packaging",
-        "python": "clippy",
-        "redhat": "packaging",
-        "ripd": "rip",
-        "ripngd": "ripng",
-        "sharpd": "sharp",
-        "snapcraft": "packaging",
-        "solaris": "packaging",
-        "staticd": "staticd",
-        "tests": "tests",
-        "tools": "tools",
-        "vtysh": "vtysh",
-        "vrrpd": "vrrp",
-        "watchfrr": "watchfrr",
-        "yang": "yang",
-        "zebra": "zebra",
-        # files
-        "configure.ac": "build",
-        "makefile.am": "build",
-        "bootstrap.sh": "build",
-    }
-
-    commits = pr.get_commits()
-    labels = set()
-
-    for commit in commits:
-        msg = commit.commit.message
-        match = re.match(r"^([^:\n]+):", msg)
-        if match:
-            lbls = match.groups()[0].split(",")
-            lbls = map(lambda x: x.strip(), lbls)
-            lbls = map(lambda x: x.lower(), lbls)
-            lbls = filter(lambda x: x in label_map, lbls)
-            lbls = map(lambda x: label_map[x], lbls)
-            labels = labels | set(lbls)
-
-    if labels:
-        pr.add_to_labels(*labels)
-
-
-def pr_check_commit_messages(pr):
-    """
-    For each commit in the PR, check for the following:
-
-    - incorrect summary line formatting
-    - missing DCOO / Signed-off-by line
-    - missing blank line between summary line and message body
-
-    Returns a dict indicating whether each of the above is true for any commit
-    in the PR.
-    """
-    commits = pr.get_commits()
-
-    warns = defaultdict(bool)
-
-    for commit in commits:
-        msg = commit.commit.message
-
-        if len(msg) == 0:
-            app.logger.warning("[-] Zero length commit message; weird")
-            continue
-
-        if msg.startswith("Revert") or msg.startswith("Merge"):
-            continue
-
-        lines = msg.split("\n")
-
-        if len(lines) < 2 or len(lines[1]) > 0:
-            warns["blankln"] = True
-
-        if ":" not in lines[0]:
-            warns["bad_msg"] = True
-
-        if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
-            warns["signoff"] = True
-
-    return warns
-
-
-def pr_review(repo, pr):
-    warnings = pr_check_commit_messages(pr)
-
-    app.logger.warning("[+] Reviewing {}".format(pr.number))
-
-    style = None
-    try:
-        style = pr_check_format(repo, pr)
-    except Exception as e:
-        app.logger.warning("[-] Style checking failed:\n" + str(e))
-
-    comment = ""
-    nak = False
-
-    if warnings["bad_msg"]:
-        comment += pr_warn_commit_msg
-        nak = True
-    if warnings["signoff"]:
-        comment += pr_warn_signoff_msg
-        nak = True
-    if warnings["blankln"]:
-        comment += pr_warn_blankln_msg
-        nak = True
-    if style:
-        try:
-            gistname = "cr_{}_{}.diff".format(pr.number, int(time.time()))
-            files = {gistname: InputFileContent(style)}
-            gist = my_user.create_gist(True, files, "FRRouting/frr #{}".format(pr.number))
-            raw_url = gist.files[gistname].raw_url
-            comment += """
-<details>
-<summary><b>Click for style suggestions</b></summary>
-
-To apply these suggestions:
-
-<p>
-
-```
-curl -s {gisturl} | git apply
-```
-
-</p>
-
-<p>
-
-```diff
-{stylediff}
-```
-
-</p>
-</details>
-
-""".format(gisturl=raw_url, stylediff=style)
-        except Exception as e:
-            app.logger.warning("[-] Failed to create gist: ")
-            app.logger.warning(e)
-
-    # dismiss previous reviews if necessary
-    if not nak:
-        for r in pr.get_reviews():
-            if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
-                r.dismiss("blocking comments addressed")
-
-    # Post review
-    if comment != "":
-        comment = pr_greeting_msg + comment
-        comment += pr_guidelines_ref_msg
-        event = "COMMENT" if not nak else "REQUEST_CHANGES"
-        pr.create_review(body=comment, event=event)
-
-    return comment
-
 
 def pull_request_opened(j):
     """
@@ -471,9 +482,9 @@ def pull_request_opened(j):
     repo = g.get_repo(j["repository"]["full_name"])
     pr = repo.get_pull(j["number"])
 
-    pr_add_labels(pr)
-
-    pr_review(repo, pr)
+    pr = FrrPullRequest(repo, pr)
+    pr.add_labels()
+    pr.review()
 
     return Response("OK", 200)
 
@@ -490,14 +501,7 @@ def pull_request_synchronize(j):
     If any issues are found, a review is submitted indicating the issues.
     If prior issues have been resolved, the previous review is dismissed.
     """
-    repo = g.get_repo(j["repository"]["full_name"])
-    pr = repo.get_pull(j["number"])
-
-    pr_add_labels(pr)
-
-    pr_review(repo, pr)
-
-    return Response("OK", 200)
+    return pull_request_opened(j)
 
 
 # API handler map
