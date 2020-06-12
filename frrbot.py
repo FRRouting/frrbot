@@ -345,6 +345,26 @@ curl -s {gisturl} | git apply
             event = "COMMENT" if not nak else "REQUEST_CHANGES"
             self.pr.create_review(body=comment, event=event)
 
+        try:
+            state = "success" if not nak else "failure"
+            description = "OK" if not nak else "Problems found"
+            description = (
+                "OK - but has style issues" if not nak and comment else description
+            )
+            commits = self.pr.get_commits()
+            last_commit = None
+            for last_commit in commits:
+                pass
+            app.logger.warning(last_commit)
+            last_commit.create_status(
+                state=state,
+                description=description,
+                target_url="",
+                context="polychaeta",
+            )
+        except Exception as e:
+            app.logger.warning("Error while making status: {}".format(e))
+
         return comment
 
     def add_labels(self):
