@@ -46,7 +46,12 @@ pr_warn_banned_functions = "* `{}` are banned; please use `{}`\n".format(
     ", ".join([x[0] for x in banned_functions]),
     ", ".join([x[1] for x in banned_functions]),
 )
-pr_guidelines_ref_msg = "\nIf you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).\n"
+pr_guidelines_ref_msg = """
+If you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).
+
+After making changes, you do not need to create a new PR. You should perform an [amend or interactive rebase](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History) followed by a [force push](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force).
+"""
+
 
 # Scheduler functions ----------------------------------------------------------
 
