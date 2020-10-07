@@ -25,6 +25,7 @@ import subprocess
 import pygit2
 import requests
 import time
+import re
 
 # Global data ------------------------------------------------------------------
 autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
@@ -255,8 +256,10 @@ class FrrPullRequest(object):
             return None
 
         added = [x for x in resp.text.split("\n") if x.startswith("+")]
-        banned = [x[0] for x in banned_functions]
-        has_banned_functions = any([any([y in x for y in banned]) for x in added])
+        banned_regexp = [r"\s{}\(".format(x[0]) for x in banned_functions]
+        has_banned_functions = any(
+            [any([(re.search(y, x) is not None) for y in banned_regexp]) for x in added]
+        )
 
         return has_banned_functions
 
