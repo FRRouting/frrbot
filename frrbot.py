@@ -192,16 +192,25 @@ class FrrPullRequest(object):
         cmd = "git -C {} add -u".format(repodir).split(" ")
         subprocess.run(cmd)
         app.logger.warning("[+] Generating style diff")
-        cmd = "git -C {} clang-format --diff".format(repodir).split(" ")
+        cmd = "git -C {} clang-format".format(repodir).split(" ")
+        subprocess.run(cmd)
+
+        pyfiles = self.pr.get_files()
+        pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
+        for codefile in pyfiles:
+            resp = requests.get(codefile.raw_url)
+            filename = "{}/{}".format(repodir, codefile.filename)
+            cmd = "python3 -m black {}".format(filename).split(" ")
+            app.logger.warning("[+] Running: {}".format(cmd))
+            subprocess.run(cmd)
+
+        cmd = "git -C {} diff".format(repodir).split(" ")
         result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
 
-        app.logger.warning("[+] Result: {}".format(result))
         result = result.decode("utf-8") if result is not None else result
-        if (
-            result
-            and "did not modify" not in result
-            and "no modified files" not in result
-        ):
+        app.logger.warning("[+] Result: {}".format(result))
+
+        if result:
             return result
 
     def check_commits(self):
