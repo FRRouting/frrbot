@@ -491,6 +491,9 @@ def issue_comment_created(j):
 
     autoclose <time period>
        Automatically close this issue in <time period>.
+
+    rereview
+       Re-run bot review on PR
     """
 
     reponame = j["repository"]["full_name"]
@@ -521,7 +524,7 @@ def issue_comment_created(j):
             )
             return
 
-        closedate = dateparser.parse(arg)
+        closedate = dateparser.parse(arg.strip())
         if closedate is not None and closedate > datetime.datetime.now():
             schedule_close_issue(issue, closedate)
             issue.add_to_labels("autoclose")
@@ -529,13 +532,20 @@ def issue_comment_created(j):
         elif closedate is None:
             app.logger.warning("[-] Couldn't parse '{}' as a datetime".format(arg))
 
-    verbs = {"autoclose": verb_autoclose}
+
+    def verb_rereview(arg):
+        pr = FrrPullRequest(repo, repo.get_pull(j["issue"]["number"]))
+        pr.review()
+
+
+    verbs = {"autoclose": verb_autoclose, "rereview": verb_rereview}
 
     had_verb = False
 
     for verb in verbs.keys():
-        tp = "@{} {} ".format(my_user.login, verb)
+        tp = "@{} {}".format(my_user.login, verb)
         if tp.lower() in body.lower():
+            app.logger.warning("[+] Found trigger '{}'".format(verb))
             partition = body.lower().partition(tp.lower())
             app.logger.warning(
                 "[+] Trigger detected: {} {}".format(partition[1], partition[2])
