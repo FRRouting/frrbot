@@ -28,6 +28,7 @@ import time
 import re
 
 # Global data ------------------------------------------------------------------
+badissuemsg = "When filing a bug report, please:\n\n- Describe the expected behavior\n- Describe the observed behavior\n\nPlease be sure to provide:\n\n- FRR version\n- OS distribution (e.g. Fedora, OpenBSD)\n- Kernel version (e.g. Linux 5.4)\n\nNeglecting to provide this information makes your issue difficult to address."
 autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
 noautoclosemsg = "This issue will no longer be automatically closed."
 triggerlabel = "autoclose"
@@ -538,7 +539,13 @@ def issue_comment_created(j):
         pr.review()
 
 
-    verbs = {"autoclose": verb_autoclose, "rereview": verb_rereview}
+    def verb_badreport(arg):
+        issue.create_comment(badissuemsg)
+        issue.get_comment(j["comment"]["id"]).create_reaction("+1")
+
+
+
+    verbs = {"autoclose": verb_autoclose, "rereview": verb_rereview, "bad-report": verb_badreport}
 
     had_verb = False
 
