@@ -36,7 +36,7 @@ banned_functions = [
     ("sprintf", "snprintf"),
     ("strcat", "strlcat"),
     ("strcpy", "strlcpy"),
-    # ("inet_ntoa", "frr_inet_ntop"),
+    ("inet_ntoa", "inet_ntop"),
 ]
 
 pr_greeting_msg = "Thanks for your contribution to FRR!\n\n"
