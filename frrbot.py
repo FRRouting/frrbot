@@ -533,19 +533,19 @@ def issue_comment_created(j):
         elif closedate is None:
             app.logger.warning("[-] Couldn't parse '{}' as a datetime".format(arg))
 
-
     def verb_rereview(arg):
         pr = FrrPullRequest(repo, repo.get_pull(j["issue"]["number"]))
         pr.review()
-
 
     def verb_badreport(arg):
         issue.create_comment(badissuemsg)
         issue.get_comment(j["comment"]["id"]).create_reaction("+1")
 
-
-
-    verbs = {"autoclose": verb_autoclose, "rereview": verb_rereview, "bad-report": verb_badreport}
+    verbs = {
+        "autoclose": verb_autoclose,
+        "rereview": verb_rereview,
+        "bad-report": verb_badreport,
+    }
 
     had_verb = False
 
