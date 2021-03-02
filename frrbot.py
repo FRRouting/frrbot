@@ -1,52 +1,51 @@
 #!/usr/bin/env python3
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.schedulers.background import BackgroundScheduler
+from collections import defaultdict
+import datetime
+import hmac
+import os
+import re
+import subprocess
+import time
+
+import yaml
+import pygit2
+import requests
+import dateparser
+import flask
 from flask import Flask
 from flask import Response
 from flask import request
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
 from github import Github
 from github import GithubException
 from github import InputFileContent
-from hmac import HMAC
 from werkzeug.exceptions import BadRequest
-from collections import defaultdict
-import dateparser
-import datetime
-import hmac
-import json
-import os
-import re
-import yaml
-import subprocess
-import pygit2
-import requests
-import time
-import re
 
 # Global data ------------------------------------------------------------------
-badissuemsg = "When filing a bug report, please:\n\n- Describe the expected behavior\n- Describe the observed behavior\n\nPlease be sure to provide:\n\n- FRR version\n- OS distribution (e.g. Fedora, OpenBSD)\n- Kernel version (e.g. Linux 5.4)\n\nNeglecting to provide this information makes your issue difficult to address."
-autoclosemsg = "This issue will be automatically closed in one week unless there is further activity."
-noautoclosemsg = "This issue will no longer be automatically closed."
-triggerlabel = "autoclose"
-banned_functions = [
+BAD_ISSUE_MSG = "When filing a bug report, please:\n\n- Describe the expected behavior\n- Describe the observed behavior\n\nPlease be sure to provide:\n\n- FRR version\n- OS distribution (e.g. Fedora, OpenBSD)\n- Kernel version (e.g. Linux 5.4)\n\nNeglecting to provide this information makes your issue difficult to address."
+AUTO_CLOSE_MSG = "This issue will be automatically closed in one week unless there is further activity."
+NO_AUTO_CLOSE_MSG = "This issue will no longer be automatically closed."
+TRIGGER_LABEL = "autoclose"
+BANNED_FUNCTIONS = [
     ("sprintf", "snprintf"),
     ("strcat", "strlcat"),
     ("strcpy", "strlcpy"),
     ("inet_ntoa", "inet_ntop"),
 ]
 
-pr_greeting_msg = "Thanks for your contribution to FRR!\n\n"
-pr_warn_signoff_msg = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
-pr_warn_blankln_msg = "* One of your commits does not have a blank line between the summary and body; this will break `git log --oneline`\n"
-pr_warn_commit_msg = (
+PR_GREETING_MSG = "Thanks for your contribution to FRR!\n\n"
+PR_WARN_SIGNOFF_MSG = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
+PR_WARN_BLANKLN_MSG = "* One of your commits does not have a blank line between the summary and body; this will break `git log --oneline`\n"
+PR_WARN_COMMIT_MSG = (
     "* One of your commits has an improperly formatted commit message\n"
 )
-pr_warn_banned_functions = "* `{}` are banned; please use `{}`\n".format(
-    ", ".join([x[0] for x in banned_functions]),
-    ", ".join([x[1] for x in banned_functions]),
+PR_WARN_BANNED_FUNCTIONS = "* `{}` are banned; please use `{}`\n".format(
+    ", ".join([x[0] for x in BANNED_FUNCTIONS]),
+    ", ".join([x[1] for x in BANNED_FUNCTIONS]),
 )
-pr_guidelines_ref_msg = """
+PR_GUIDELINES_REF_MSG = """
 If you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).
 
 After making changes, you do not need to create a new PR. You should perform an [amend or interactive rebase](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History) followed by a [force push](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force).
@@ -56,13 +55,19 @@ After making changes, you do not need to create a new PR. You should perform an 
 # Scheduler functions ----------------------------------------------------------
 
 
-def close_issue(rn, num):
-    app.logger.warning("[+] Closing issue #{}".format(num))
-    repo = g.get_repo(rn)
+def close_issue(repo_name, num):
+    """
+    Immediately close the named issue
+
+    :param str: repository name
+    :param int: issue number
+    """
+    LOG.warning("[+] Closing issue #{}", num)
+    repo = g.get_repo(repo_name)
     issue = repo.get_issue(num)
     issue.edit(state="closed")
     try:
-        issue.remove_from_labels(triggerlabel)
+        issue.remove_from_labels(TRIGGER_LABEL)
     except GithubException:
         pass
 
@@ -77,9 +82,7 @@ def schedule_close_issue(issue, when):
     reponame = issue.repository.full_name
     issuenum = issue.number
     issueid = "{}@@@{}".format(reponame, issuenum)
-    app.logger.warning(
-        "[-] Scheduling issue #{} for autoclose (id: {})".format(issuenum, issueid)
-    )
+    LOG.warning("[-] Scheduling issue {} for autoclose (id: {})", issuenum, issueid)
     scheduler.add_job(
         close_issue,
         run_date=when,
@@ -98,7 +101,7 @@ def cancel_close_issue(issue):
     reponame = issue.repository.full_name
     issuenum = issue.id
     issueid = "{}@@@{}".format(reponame, issuenum)
-    app.logger.warning("[-] Descheduling issue #{} for closing".format(issuenum))
+    LOG.warning("[-] Descheduling issue #{} for closing", issuenum)
     scheduler.remove_job(issueid)
 
 
@@ -129,16 +132,21 @@ scheduler.print_jobs()
 
 # Initialize Flask app
 app = Flask(__name__)
+LOG = flask.logging.create_logger(app)
 print("[+] Initialized Flask app")
 
 
 # Pull request management ------------------------------------------------------
 
 
-class FrrPullRequest(object):
-    def __init__(self, repo, pr):
+class FrrPullRequest:
+    """
+    FRR pull request
+    """
+
+    def __init__(self, repo, pull_request):
         self.repo = repo
-        self.pr = pr
+        self.pull_request = pull_request
 
     def check_format(self):
         """
@@ -160,54 +168,58 @@ class FrrPullRequest(object):
             pygit2.clone_repository(self.repo.git_url, repodir)
 
         # fetch pr diff
-        resp = requests.get(self.pr.diff_url)
+        resp = requests.get(self.pull_request.diff_url)
         if resp.status_code != 200:
-            app.logger.warning(
-                "[-] GET '{}' failed with HTTP {}".format(
-                    self.pr.diff_url, resp.status_code
-                )
+            LOG.warning(
+                "[-] GET '{}' failed with HTTP {}",
+                self.pull_request.diff_url,
+                resp.status_code,
             )
             return None
         if len(resp.text) == 0:
-            app.logger.warning("[-] diff at '{}' is empty".format(self.pr.diff_url))
+            LOG.warning("[-] diff at '{}' is empty", self.pull_request.diff_url)
             return None
-        dn = "/tmp/pr_{}.diff".format(self.pr.number)
-        with open(dn, "w") as change:
+        diff_filename = "/tmp/pr_{}.diff".format(self.pull_request.number)
+        with open(diff_filename, "w") as change:
             change.write(resp.text)
 
-        app.logger.warning("[+] Fetching {}".format(self.pr.base.sha))
-        cmd = "git -C {} fetch origin {}".format(repodir, self.pr.base.sha).split(" ")
-        subprocess.run(cmd)
-        app.logger.warning("[+] Resetting to {}".format(self.pr.base.sha))
-        cmd = "git -C {} reset --hard {}".format(repodir, self.pr.base.sha).split(" ")
-        subprocess.run(cmd)
-        app.logger.warning("[+] Applying patch")
-        cmd = "git -C {} apply {}".format(repodir, dn).split(" ")
-        subprocess.run(cmd)
-        app.logger.warning("[+] Applying ignore rules")
+        LOG.warning("[+] Fetching {}", self.pull_request.base.sha)
+        cmd = "git -C {} fetch origin {}".format(
+            repodir, self.pull_request.base.sha
+        ).split(" ")
+        subprocess.run(cmd, check=False)
+        LOG.warning("[+] Resetting to {}", self.pull_request.base.sha)
+        cmd = "git -C {} reset --hard {}".format(
+            repodir, self.pull_request.base.sha
+        ).split(" ")
+        subprocess.run(cmd, check=False)
+        LOG.warning("[+] Applying patch")
+        cmd = "git -C {} apply {}".format(repodir, diff_filename).split(" ")
+        subprocess.run(cmd, check=False)
+        LOG.warning("[+] Applying ignore rules")
         cmd = "git -C {} checkout -- {}".format(repodir, " ".join(ignore)).split(" ")
-        subprocess.run(cmd)
-        app.logger.warning("[+] Staging patch")
+        subprocess.run(cmd, check=False)
+        LOG.warning("[+] Staging patch")
         cmd = "git -C {} add -u".format(repodir).split(" ")
-        subprocess.run(cmd)
-        app.logger.warning("[+] Generating style diff")
+        subprocess.run(cmd, check=False)
+        LOG.warning("[+] Generating style diff")
         cmd = "git -C {} clang-format".format(repodir).split(" ")
-        subprocess.run(cmd)
+        subprocess.run(cmd, check=False)
 
-        pyfiles = self.pr.get_files()
+        pyfiles = self.pull_request.get_files()
         pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
         for codefile in pyfiles:
             resp = requests.get(codefile.raw_url)
             filename = "{}/{}".format(repodir, codefile.filename)
             cmd = "python3 -m black {}".format(filename).split(" ")
-            app.logger.warning("[+] Running: {}".format(cmd))
-            subprocess.run(cmd)
+            LOG.warning("[+] Running: {}", cmd)
+            subprocess.run(cmd, check=False)
 
         cmd = "git -C {} diff".format(repodir).split(" ")
-        result = subprocess.run(cmd, stdout=subprocess.PIPE).stdout
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout
 
         result = result.decode("utf-8") if result is not None else result
-        app.logger.warning("[+] Result: {}".format(result))
+        LOG.warning("[+] Result: {}", result)
 
         if result:
             return result
@@ -223,7 +235,7 @@ class FrrPullRequest(object):
         Returns a dict indicating whether each of the above is true for any commit
         in the PR.
         """
-        commits = self.pr.get_commits()
+        commits = self.pull_request.get_commits()
 
         warns = defaultdict(bool)
 
@@ -231,7 +243,7 @@ class FrrPullRequest(object):
             msg = commit.commit.message
 
             if len(msg) == 0:
-                app.logger.warning("[-] Zero length commit message; weird")
+                LOG.warning("[-] Zero length commit message; weird")
                 continue
 
             if msg.startswith("Revert") or msg.startswith("Merge"):
@@ -251,70 +263,81 @@ class FrrPullRequest(object):
         return warns
 
     def check_functions(self):
-        resp = requests.get(self.pr.diff_url)
+        """
+        Check for banned functions in the diff
+        """
+        resp = requests.get(self.pull_request.diff_url)
         if resp.status_code != 200:
-            app.logger.warning(
-                "[-] GET '{}' failed with HTTP {}".format(
-                    self.pr.diff_url, resp.status_code
-                )
+            LOG.warning(
+                "[-] GET '{}' failed with HTTP {}",
+                self.pull_request.diff_url,
+                resp.status_code,
             )
             return None
         if len(resp.text) == 0:
-            app.logger.warning("[-] diff at '{}' is empty".format(self.pr.diff_url))
+            LOG.warning("[-] diff at '{}' is empty", self.pull_request.diff_url)
             return None
 
         added = [x for x in resp.text.split("\n") if x.startswith("+")]
-        banned_regexp = [r"\s{}\(".format(x[0]) for x in banned_functions]
+        banned_regexp = [r"\s{}\(".format(x[0]) for x in BANNED_FUNCTIONS]
         has_banned_functions = any(
-            [any([(re.search(y, x) is not None) for y in banned_regexp]) for x in added]
+            any((re.search(y, x) is not None) for y in banned_regexp) for x in added
         )
 
         return has_banned_functions
 
     def check(self):
+        """
+        Perform all checks on this PR
+        """
         issues = defaultdict(lambda: None)
 
         issues["commits"] = self.check_commits()
 
         try:
             issues["style"] = self.check_format()
-        except Exception as e:
-            app.logger.warning("[-] Style checking failed:\n" + str(e))
+        except Exception as error:
+            LOG.warning("[-] Style checking failed:\n{}", str(error))
 
         try:
             issues["functions"] = self.check_functions()
-        except Exception as e:
-            app.logger.warning("[-] Function checking failed:\n" + str(e))
+        except Exception as error:
+            LOG.warning("[-] Function checking failed:\n{}", str(error))
 
         return issues
 
     def review(self):
+        """
+        Perform all checks on this PR and leave a review if there are problems
+        """
         issues = self.check()
 
-        app.logger.warning("[+] Reviewing {}".format(self.pr.number))
+        LOG.warning("[+] Reviewing {}", self.pull_request.number)
 
         comment = ""
         nak = False
 
         if issues["commits"]:
             if issues["commits"]["bad_msg"]:
-                comment += pr_warn_commit_msg
+                comment += PR_WARN_COMMIT_MSG
                 nak = True
             if issues["commits"]["signoff"]:
-                comment += pr_warn_signoff_msg
+                comment += PR_WARN_SIGNOFF_MSG
                 nak = True
             if issues["commits"]["blankln"]:
-                comment += pr_warn_blankln_msg
+                comment += PR_WARN_BLANKLN_MSG
                 nak = True
         if issues["functions"]:
-            comment += pr_warn_banned_functions
+            comment += PR_WARN_BANNED_FUNCTIONS
             nak = True
         if issues["style"]:
             try:
-                gistname = "cr_{}_{}.diff".format(self.pr.number, int(time.time()))
+                gistname = "cr_{}_{}.diff".format(
+                    self.pull_request.number, int(time.time())
+                )
                 files = {gistname: InputFileContent(issues["style"])}
                 gist = my_user.create_gist(
-                    True, files, "FRRouting/frr #{}".format(self.pr.number)
+                    True, files, "FRRouting/frr #{}".format(self.pull_request.number)
                 )
                 raw_url = gist.files[gistname].raw_url
                 comment += """
@@ -344,22 +367,22 @@ curl -s {gisturl} | git apply
                     gisturl=raw_url, stylediff=issues["style"]
                 )
 
-            except Exception as e:
-                app.logger.warning("[-] Failed to create gist: ")
-                app.logger.warning(e)
+            except Exception as error:
+                LOG.warning("[-] Failed to create gist: ")
+                LOG.warning(error)
 
         # dismiss previous reviews if necessary
         if not nak:
-            for r in self.pr.get_reviews():
-                if r.user.id == my_user.id and r.state == "CHANGES_REQUESTED":
-                    r.dismiss("blocking comments addressed")
+            for review in self.pull_request.get_reviews():
+                if review.user.id == my_user.id and review.state == "CHANGES_REQUESTED":
+                    review.dismiss("blocking comments addressed")
 
         # Post review
         if comment != "":
-            comment = pr_greeting_msg + comment
-            comment += pr_guidelines_ref_msg
+            comment = PR_GREETING_MSG + comment
+            comment += PR_GUIDELINES_REF_MSG
             event = "COMMENT" if not nak else "REQUEST_CHANGES"
-            self.pr.create_review(body=comment, event=event)
+            self.pull_request.create_review(body=comment, event=event)
 
         try:
             state = "success" if not nak else "failure"
@@ -367,19 +390,19 @@ curl -s {gisturl} | git apply
             description = (
                 "OK - but has style issues" if not nak and comment else description
             )
-            commits = self.pr.get_commits()
+            commits = self.pull_request.get_commits()
             last_commit = None
             for last_commit in commits:
                 pass
-            app.logger.warning(last_commit)
+            LOG.warning(last_commit)
             last_commit.create_status(
                 state=state,
                 description=description,
                 target_url="",
                 context="polychaeta",
             )
-        except Exception as e:
-            app.logger.warning("Error while making status: {}".format(e))
+        except Exception as error:
+            LOG.warning("Error while making status: {}", error)
 
         return comment
 
@@ -428,7 +451,7 @@ curl -s {gisturl} | git apply
             "bootstrap.sh": "build",
         }
 
-        commits = self.pr.get_commits()
+        commits = self.pull_request.get_commits()
         labels = set()
 
         for commit in commits:
@@ -443,13 +466,16 @@ curl -s {gisturl} | git apply
                 labels = labels | set(lbls)
 
         if labels:
-            self.pr.add_to_labels(*labels)
+            self.pull_request.add_to_labels(*labels)
 
 
 # Webhook handlers -------------------------------------------------------------
 
 
 def issue_labeled(j):
+    """
+    Handle an issue getting a new label
+    """
     reponame = j["repository"]["full_name"]
     issuenum = j["issue"]["number"]
     issue = g.get_repo(reponame).get_issue(issuenum)
@@ -457,7 +483,7 @@ def issue_labeled(j):
     def label_autoclose():
         closedate = datetime.datetime.now() + datetime.timedelta(weeks=1)
         schedule_close_issue(issue, closedate)
-        issue.create_comment(autoclosemsg)
+        issue.create_comment(AUTO_CLOSE_MSG)
 
     label_actions = {"autoclose": label_autoclose}
 
@@ -514,11 +540,9 @@ def issue_comment_created(j):
         be "in 1 day" to close the issue in 1 day, or "May 25th" to specify the
         next occurring May 15th.
         """
-        if not (perm == "write" or perm == "admin"):
-            app.logger.warning(
-                "[-] User '{}' ({}) isn't authorized to use this command".format(
-                    sender, perm
-                )
+        if not perm in ("write", "admin"):
+            LOG.warning(
+                "[-] User '{}' ({}) isn't authorized to use this command", sender, perm
             )
             return
 
@@ -528,14 +552,14 @@ def issue_comment_created(j):
             issue.add_to_labels("autoclose")
             issue.get_comment(j["comment"]["id"]).create_reaction("+1")
         elif closedate is None:
-            app.logger.warning("[-] Couldn't parse '{}' as a datetime".format(arg))
+            LOG.warning("[-] Couldn't parse '{}' as a datetime", arg)
 
-    def verb_rereview(arg):
-        pr = FrrPullRequest(repo, repo.get_pull(j["issue"]["number"]))
-        pr.review()
+    def verb_rereview(_):
+        pull_request = FrrPullRequest(repo, repo.get_pull(j["issue"]["number"]))
+        pull_request.review()
 
-    def verb_badreport(arg):
-        issue.create_comment(badissuemsg)
+    def verb_badreport(_):
+        issue.create_comment(BAD_ISSUE_MSG)
         issue.get_comment(j["comment"]["id"]).create_reaction("+1")
 
     verbs = {
@@ -546,22 +570,20 @@ def issue_comment_created(j):
 
     had_verb = False
 
-    for verb in verbs.keys():
-        tp = "@{} {}".format(my_user.login, verb)
-        if tp.lower() in body.lower():
-            app.logger.warning("[+] Found trigger '{}'".format(verb))
-            partition = body.lower().partition(tp.lower())
-            app.logger.warning(
-                "[+] Trigger detected: {} {}".format(partition[1], partition[2])
-            )
-            verbs[verb](partition[2])
+    for verb, handler in verbs.items():
+        trigger_me = "@{} {}".format(my_user.login, verb)
+        if trigger_me.lower() in body.lower():
+            LOG.warning("[+] Found trigger '{}'", verb)
+            partition = body.lower().partition(trigger_me.lower())
+            LOG.warning("[+] Trigger detected: {} {}", partition[1], partition[2])
+            handler(partition[2])
             had_verb = True
 
     issueid = "{}@@@{}".format(reponame, issuenum)
     if not had_verb and scheduler.get_job(issueid) is not None:
         scheduler.remove_job(issueid)
-        issue.remove_from_labels(triggerlabel)
-        issue.create_comment(noautoclosemsg)
+        issue.remove_from_labels(TRIGGER_LABEL)
+        issue.create_comment(NO_AUTO_CLOSE_MSG)
 
     return Response("OK", 200)
 
@@ -576,11 +598,11 @@ def pull_request_opened(j):
     If any issues are found, a review is submitted indicating the issues.
     """
     repo = g.get_repo(j["repository"]["full_name"])
-    pr = repo.get_pull(j["number"])
+    pull_request = repo.get_pull(j["number"])
 
-    pr = FrrPullRequest(repo, pr)
-    pr.add_labels()
-    pr.review()
+    pull_request = FrrPullRequest(repo, pull_request)
+    pull_request.add_labels()
+    pull_request.review()
 
     return Response("OK", 200)
 
@@ -623,48 +645,51 @@ event_handlers = {
 }
 
 
-def handle_webhook(request):
+def handle_webhook(req):
+    """
+    Handle reception of a GitHub webhook
+    """
     try:
-        evtype = request.headers["X_GITHUB_EVENT"]
-    except KeyError as e:
-        app.logger.warning("[-] No X-GitHub-Event header...")
+        evtype = req.headers["X_GITHUB_EVENT"]
+    except KeyError:
+        LOG.warning("[-] No X-GitHub-Event header...")
         return Response("No X-GitHub-Event header", 400)
 
-    app.logger.warning("[+] Handling webhook '{}'".format(evtype))
+    LOG.warning("[+] Handling webhook '{}'", evtype)
 
     try:
-        event = event_handlers[evtype]
-    except KeyError as e:
-        app.logger.warning("[+] Unknown event '{}'".format(evtype))
+        _ = event_handlers[evtype]
+    except KeyError:
+        LOG.warning("[+] Unknown event '{}'", evtype)
         return Response("OK", 200)
 
     try:
-        j = request.get_json()
-    except BadRequest as e:
-        app.logger.warning("[-] Could not parse payload as JSON")
+        j = req.get_json()
+    except BadRequest:
+        LOG.warning("[-] Could not parse payload as JSON")
         return Response("Bad JSON", 400)
 
     try:
         action = j["action"]
-    except KeyError as e:
-        app.logger.warning("[+] No action for event '{}'".format(evtype))
+    except KeyError:
+        LOG.warning("[+] No action for event '{}'", evtype)
         return Response("OK", 200)
 
     try:
         handler = event_handlers[evtype][action]
-    except KeyError as e:
-        app.logger.warning("[+] No handler for action '{}'".format(action))
+    except KeyError:
+        LOG.warning("[+] No handler for action '{}'", action)
         return Response("OK", 200)
 
     try:
         sender = j["sender"]["login"]
         if sender == my_user.login:
-            app.logger.warning("[+] Ignoring event triggered by me")
+            LOG.warning("[+] Ignoring event triggered by me")
             return Response("OK", 200)
-    except KeyError as e:
+    except KeyError:
         pass
 
-    app.logger.warning("[+] Handling action '{}' on event '{}'".format(action, evtype))
+    LOG.warning("[+] Handling action '{}' on event '{}'", action, evtype)
     return handler(j)
 
 
@@ -672,22 +697,36 @@ def handle_webhook(request):
 
 
 def gh_sig_valid(req):
-    mydigest = "sha1=" + HMAC(bytes(whsec, "utf8"), req.get_data(), "sha1").hexdigest()
+    """
+    Determine whether the signature in a request, ostensibly from GitHub, is
+    valid
+
+    :param req: The GitHub request
+    """
+    mydigest = (
+        "sha1=" + hmac.HMAC(bytes(whsec, "utf8"), req.get_data(), "sha1").hexdigest()
+    )
     ghdigest = req.headers["X_HUB_SIGNATURE"]
     comp = hmac.compare_digest(ghdigest, mydigest)
-    app.logger.warning("[+] Request: mine = {}, theirs = {}".format(mydigest, ghdigest))
+    LOG.warning("[+] Request: mine = {}, theirs = {}", mydigest, ghdigest)
     return comp
 
 
 @app.route("/", methods=["GET", "POST"])
 def parse_payload():
+    """
+    Validate and parse GitHub webhook request payload
+    """
     try:
         if not gh_sig_valid(request):
             return Response("Unauthorized", 401)
+    # No matter what the problem is with authentication, fail auth
+    # pragma pylint: disable=W0702
     except:
         return Response("Unauthorized", 401)
+    # pragma pylint: enable=W0702
 
     if request.method == "POST":
         return handle_webhook(request)
-    else:
-        return Response("OK", 200)
+
+    return Response("OK", 200)
