@@ -209,7 +209,6 @@ class FrrPullRequest:
         pyfiles = self.pull_request.get_files()
         pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
         for codefile in pyfiles:
-            resp = requests.get(codefile.raw_url)
             filename = "{}/{}".format(repodir, codefile.filename)
             cmd = "python3 -m black {}".format(filename).split(" ")
             LOG.warning("[+] Running: {}", cmd)
