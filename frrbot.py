@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-#
-# Deps:
-# pip3 install flask PyGithub apscheduler sqlalchemy dateparser pygit2 requests
-#
+
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
