@@ -137,6 +137,7 @@ print("[+] Initialized Flask app")
 
 # Pull request management ------------------------------------------------------
 
+
 class FrrPullRequest:
     """
     FRR pull request
@@ -159,13 +160,19 @@ class FrrPullRequest:
 
         for codefile in pyfiles:
             filename = "{}/{}".format(repodir, codefile.filename)
-            cmd = "pylint --persistent=n --disable=all --enable=E --disable=import-error {}".format(filename).split(" ")
+            cmd = "pylint --persistent=n --disable=all --enable=E --disable=import-error {}".format(
+                filename
+            ).split(
+                " "
+            )
             LOG.warning("[+] Running: %s", cmd)
             pyl_completed_proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=False)
             LOG.warning("stdout: %s", pyl_completed_proc.stdout)
             LOG.warning("stderr: %s", pyl_completed_proc.stderr)
             if pyl_completed_proc.returncode != 0:
-                result += "Pylint report for {}:\n{}\n\n".format(filename, pyl_completed_proc.stdout.decode("utf-8"))
+                result += "Pylint report for {}:\n{}\n\n".format(
+                    filename, pyl_completed_proc.stdout.decode("utf-8")
+                )
 
         return result
 
@@ -376,7 +383,9 @@ Pylint found errors in source files changed by this PR:
 {pylint_report}
 ```
 
-""".format(pylint_report=issues["diff"]["pylint"])
+""".format(
+                pylint_report=issues["diff"]["pylint"]
+            )
 
         if issues["diff"]["style"]:
             try:
