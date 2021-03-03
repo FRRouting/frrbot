@@ -62,7 +62,7 @@ def close_issue(repo_name, num):
     :param str: repository name
     :param int: issue number
     """
-    LOG.warning("[+] Closing issue #{}", num)
+    LOG.warning("[+] Closing issue #%d", num)
     repo = g.get_repo(repo_name)
     issue = repo.get_issue(num)
     issue.edit(state="closed")
@@ -82,7 +82,7 @@ def schedule_close_issue(issue, when):
     reponame = issue.repository.full_name
     issuenum = issue.number
     issueid = "{}@@@{}".format(reponame, issuenum)
-    LOG.warning("[-] Scheduling issue {} for autoclose (id: {})", issuenum, issueid)
+    LOG.warning("[-] Scheduling issue %d for autoclose (id: %d)", issuenum, issueid)
     scheduler.add_job(
         close_issue,
         run_date=when,
@@ -101,7 +101,7 @@ def cancel_close_issue(issue):
     reponame = issue.repository.full_name
     issuenum = issue.id
     issueid = "{}@@@{}".format(reponame, issuenum)
-    LOG.warning("[-] Descheduling issue #{} for closing", issuenum)
+    LOG.warning("[-] Descheduling issue #%d for closing", issuenum)
     scheduler.remove_job(issueid)
 
 
@@ -171,24 +171,24 @@ class FrrPullRequest:
         resp = requests.get(self.pull_request.diff_url)
         if resp.status_code != 200:
             LOG.warning(
-                "[-] GET '{}' failed with HTTP {}",
+                "[-] GET '%s' failed with HTTP %d",
                 self.pull_request.diff_url,
                 resp.status_code,
             )
             return None
         if len(resp.text) == 0:
-            LOG.warning("[-] diff at '{}' is empty", self.pull_request.diff_url)
+            LOG.warning("[-] diff at '%s' is empty", self.pull_request.diff_url)
             return None
         diff_filename = "/tmp/pr_{}.diff".format(self.pull_request.number)
         with open(diff_filename, "w") as change:
             change.write(resp.text)
 
-        LOG.warning("[+] Fetching {}", self.pull_request.base.sha)
+        LOG.warning("[+] Fetching %s", self.pull_request.base.sha)
         cmd = "git -C {} fetch origin {}".format(
             repodir, self.pull_request.base.sha
         ).split(" ")
         subprocess.run(cmd, check=False)
-        LOG.warning("[+] Resetting to {}", self.pull_request.base.sha)
+        LOG.warning("[+] Resetting to %s", self.pull_request.base.sha)
         cmd = "git -C {} reset --hard {}".format(
             repodir, self.pull_request.base.sha
         ).split(" ")
@@ -211,14 +211,14 @@ class FrrPullRequest:
         for codefile in pyfiles:
             filename = "{}/{}".format(repodir, codefile.filename)
             cmd = "python3 -m black {}".format(filename).split(" ")
-            LOG.warning("[+] Running: {}", cmd)
+            LOG.warning("[+] Running: %s", cmd)
             subprocess.run(cmd, check=False)
 
         cmd = "git -C {} diff".format(repodir).split(" ")
         result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout
 
         result = result.decode("utf-8") if result is not None else result
-        LOG.warning("[+] Result: {}", result)
+        LOG.warning("[+] Result: %s", result)
 
         if result:
             return result
@@ -268,13 +268,13 @@ class FrrPullRequest:
         resp = requests.get(self.pull_request.diff_url)
         if resp.status_code != 200:
             LOG.warning(
-                "[-] GET '{}' failed with HTTP {}",
+                "[-] GET '%s' failed with HTTP %d",
                 self.pull_request.diff_url,
                 resp.status_code,
             )
             return None
         if len(resp.text) == 0:
-            LOG.warning("[-] diff at '{}' is empty", self.pull_request.diff_url)
+            LOG.warning("[-] diff at '%s' is empty", self.pull_request.diff_url)
             return None
 
         added = [x for x in resp.text.split("\n") if x.startswith("+")]
@@ -296,12 +296,12 @@ class FrrPullRequest:
         try:
             issues["style"] = self.check_format()
         except Exception as error:
-            LOG.warning("[-] Style checking failed:\n{}", str(error))
+            LOG.warning("[-] Style checking failed:\n%s", str(error))
 
         try:
             issues["functions"] = self.check_functions()
         except Exception as error:
-            LOG.warning("[-] Function checking failed:\n{}", str(error))
+            LOG.warning("[-] Function checking failed:\n%s", str(error))
 
         return issues
 
@@ -311,7 +311,7 @@ class FrrPullRequest:
         """
         issues = self.check()
 
-        LOG.warning("[+] Reviewing {}", self.pull_request.number)
+        LOG.warning("[+] Reviewing #%d", self.pull_request.number)
 
         comment = ""
         nak = False
@@ -401,7 +401,7 @@ curl -s {gisturl} | git apply
                 context="polychaeta",
             )
         except Exception as error:
-            LOG.warning("Error while making status: {}", error)
+            LOG.warning("Error while making status: %s", str(error))
 
         return comment
 
@@ -541,7 +541,7 @@ def issue_comment_created(j):
         """
         if not perm in ("write", "admin"):
             LOG.warning(
-                "[-] User '{}' ({}) isn't authorized to use this command", sender, perm
+                "[-] User '%s' (%s) isn't authorized to use this command", sender, perm
             )
             return
 
@@ -551,7 +551,7 @@ def issue_comment_created(j):
             issue.add_to_labels("autoclose")
             issue.get_comment(j["comment"]["id"]).create_reaction("+1")
         elif closedate is None:
-            LOG.warning("[-] Couldn't parse '{}' as a datetime", arg)
+            LOG.warning("[-] Couldn't parse '%s' as a datetime", arg)
 
     def verb_rereview(_):
         pull_request = FrrPullRequest(repo, repo.get_pull(j["issue"]["number"]))
@@ -572,9 +572,9 @@ def issue_comment_created(j):
     for verb, handler in verbs.items():
         trigger_me = "@{} {}".format(my_user.login, verb)
         if trigger_me.lower() in body.lower():
-            LOG.warning("[+] Found trigger '{}'", verb)
+            LOG.warning("[+] Found trigger '%s'", verb)
             partition = body.lower().partition(trigger_me.lower())
-            LOG.warning("[+] Trigger detected: {} {}", partition[1], partition[2])
+            LOG.warning("[+] Trigger detected: %s %s", partition[1], partition[2])
             handler(partition[2])
             had_verb = True
 
@@ -654,12 +654,12 @@ def handle_webhook(req):
         LOG.warning("[-] No X-GitHub-Event header...")
         return Response("No X-GitHub-Event header", 400)
 
-    LOG.warning("[+] Handling webhook '{}'", evtype)
+    LOG.warning("[+] Handling webhook '%s'", evtype)
 
     try:
         _ = event_handlers[evtype]
     except KeyError:
-        LOG.warning("[+] Unknown event '{}'", evtype)
+        LOG.warning("[+] Unknown event '%s'", evtype)
         return Response("OK", 200)
 
     try:
@@ -671,13 +671,13 @@ def handle_webhook(req):
     try:
         action = j["action"]
     except KeyError:
-        LOG.warning("[+] No action for event '{}'", evtype)
+        LOG.warning("[+] No action for event '%s'", evtype)
         return Response("OK", 200)
 
     try:
         handler = event_handlers[evtype][action]
     except KeyError:
-        LOG.warning("[+] No handler for action '{}'", action)
+        LOG.warning("[+] No handler for action '%s'", action)
         return Response("OK", 200)
 
     try:
@@ -688,7 +688,7 @@ def handle_webhook(req):
     except KeyError:
         pass
 
-    LOG.warning("[+] Handling action '{}' on event '{}'", action, evtype)
+    LOG.warning("[+] Handling action '%s' on event '%s'", action, evtype)
     return handler(j)
 
 
@@ -707,7 +707,7 @@ def gh_sig_valid(req):
     )
     ghdigest = req.headers["X_HUB_SIGNATURE"]
     comp = hmac.compare_digest(ghdigest, mydigest)
-    LOG.warning("[+] Request: mine = {}, theirs = {}", mydigest, ghdigest)
+    LOG.warning("[+] Request: mine = %s, theirs = %s", mydigest, ghdigest)
     return comp
 
 
