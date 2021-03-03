@@ -135,9 +135,7 @@ app = Flask(__name__)
 LOG = flask.logging.create_logger(app)
 print("[+] Initialized Flask app")
 
-
 # Pull request management ------------------------------------------------------
-
 
 class FrrPullRequest:
     """
@@ -148,16 +146,67 @@ class FrrPullRequest:
         self.repo = repo
         self.pull_request = pull_request
 
-    def check_format(self):
+    def check_pylint(self, repodir):
         """
+        Run pylint over any changed python files, checking only for errors.
+
+        :param repodir str: directory containing repository.
+        """
+        pyfiles = self.pull_request.get_files()
+        pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
+
+        result = ""
+
+        for codefile in pyfiles:
+            filename = "{}/{}".format(repodir, codefile.filename)
+            cmd = "pylint --persistent=n --disable=all --enable=E --disable=import-error {}".format(filename).split(" ")
+            LOG.warning("[+] Running: %s", cmd)
+            pyl_completed_proc = subprocess.run(cmd, check=False)
+            if pyl_completed_proc.returncode != 0:
+                result += "Pylint report for {}:\n{}\n\n".format(filename, pyl_completed_proc.stdout)
+
+        return result
+
+    def check_style(self, repodir):
+        """
+        Run clang-format and black and return the style diff.
+
+        Modifies the repository.
+
+        :param repodir str: directory containing repository.
+        """
+        LOG.warning("[+] Generating style diff")
+        cmd = "git -C {} clang-format".format(repodir).split(" ")
+        subprocess.run(cmd, check=False)
+
+        pyfiles = self.pull_request.get_files()
+        pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
+
+        for codefile in pyfiles:
+            filename = "{}/{}".format(repodir, codefile.filename)
+            cmd = "python3 -m black {}".format(filename).split(" ")
+            LOG.warning("[+] Running: %s", cmd)
+            subprocess.run(cmd, check=False)
+
+        cmd = "git -C {} diff".format(repodir).split(" ")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout or ""
+
+        result = result.decode("utf-8")
+        LOG.warning("[+] Result: %s", result)
+
+        return result
+
+    def check_diff(self):
+        """
+        Run various checks on the code diff.
         Compute a clang-format diff for a pull request.
 
         Returns None if:
-        - the diff is empty (no style issues)
+        - there are no issues
         - any of the git operations fail
         - git-clang-format isn't installed
 
-        Otherwise returns the style correction diff produced by clang-format.
+        Otherwise returns a dictionary containing various reports on the diff.
         """
         repodir = "my_frr"
 
@@ -183,6 +232,7 @@ class FrrPullRequest:
         with open(diff_filename, "w") as change:
             change.write(resp.text)
 
+        # Apply diff
         LOG.warning("[+] Fetching %s", self.pull_request.base.sha)
         cmd = "git -C {} fetch origin {}".format(
             repodir, self.pull_request.base.sha
@@ -202,26 +252,12 @@ class FrrPullRequest:
         LOG.warning("[+] Staging patch")
         cmd = "git -C {} add -u".format(repodir).split(" ")
         subprocess.run(cmd, check=False)
-        LOG.warning("[+] Generating style diff")
-        cmd = "git -C {} clang-format".format(repodir).split(" ")
-        subprocess.run(cmd, check=False)
 
-        pyfiles = self.pull_request.get_files()
-        pyfiles = [f for f in pyfiles if f.filename.endswith(".py")]
-        for codefile in pyfiles:
-            filename = "{}/{}".format(repodir, codefile.filename)
-            cmd = "python3 -m black {}".format(filename).split(" ")
-            LOG.warning("[+] Running: %s", cmd)
-            subprocess.run(cmd, check=False)
+        result = {}
+        result["pylint"] = self.check_pylint(repodir)
+        result["style"] = self.check_style(repodir)
 
-        cmd = "git -C {} diff".format(repodir).split(" ")
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout
-
-        result = result.decode("utf-8") if result is not None else result
-        LOG.warning("[+] Result: %s", result)
-
-        if result:
-            return result
+        return result
 
     def check_commits(self):
         """
@@ -294,9 +330,9 @@ class FrrPullRequest:
         issues["commits"] = self.check_commits()
 
         try:
-            issues["style"] = self.check_format()
+            issues["diff"] = self.check_diff()
         except Exception as error:
-            LOG.warning("[-] Style checking failed:\n%s", str(error))
+            LOG.warning("[-] Style/lint checking failed:\n%s", str(error))
 
         try:
             issues["functions"] = self.check_functions()
@@ -329,7 +365,19 @@ class FrrPullRequest:
         if issues["functions"]:
             comment += PR_WARN_BANNED_FUNCTIONS
             nak = True
-        if issues["style"]:
+        if issues["diff"]["pylint"]:
+            comment += """
+---
+
+Pylint found errors in source files changed by this PR:
+
+```
+{pylint_report}
+```
+
+""".format(pylint_report=issues["diff"]["pylint"])
+
+        if issues["diff"]["style"]:
             try:
                 gistname = "cr_{}_{}.diff".format(
                     self.pull_request.number, int(time.time())
