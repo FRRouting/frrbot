@@ -198,11 +198,11 @@ class FrrPullRequest:
             subprocess.run(cmd, check=False)
 
         cmd = "git -C {} diff".format(repodir).split(" ")
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout or ""
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, check=False).stdout or b""
 
         LOG.warning("[+] Result: %s", result)
 
-        return result
+        return result.decode("utf-8")
 
     def check_diff(self):
         """
@@ -392,7 +392,7 @@ Pylint found errors in source files changed by this PR:
                 gistname = "cr_{}_{}.diff".format(
                     self.pull_request.number, int(time.time())
                 )
-                files = {gistname: InputFileContent(issues["style"])}
+                files = {gistname: InputFileContent(issues["diff"]["style"])}
                 gist = my_user.create_gist(
                     True, files, "FRRouting/frr #{}".format(self.pull_request.number)
                 )
@@ -421,12 +421,11 @@ curl -s {gisturl} | git apply
 </details>
 
             """.format(
-                    gisturl=raw_url, stylediff=issues["style"]
+                    gisturl=raw_url, stylediff=issues["diff"]["style"]
                 )
 
-            except Exception as error:
-                LOG.warning("[-] Failed to create gist: ")
-                LOG.warning(error)
+            except KeyError as error:
+                LOG.warning("[-] Failed to create gist: %s", str(error))
 
         # dismiss previous reviews if necessary
         if not nak:
