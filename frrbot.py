@@ -521,6 +521,10 @@ curl -s {gisturl} | git apply
                 lbls = map(lambda x: label_map[x], lbls)
                 labels = labels | set(lbls)
 
+            lines = msg.split("\n")
+            if lines[0].find("fix") != -1 or msg.find("Fixes:") != -1:
+                labels.add("bugfix")
+
         if labels:
             self.pull_request.add_to_labels(*labels)
 
