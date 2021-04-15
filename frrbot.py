@@ -166,7 +166,9 @@ class FrrPullRequest:
                 " "
             )
             LOG.warning("[+] Running: %s", cmd)
-            pyl_completed_proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=False)
+            pyl_completed_proc = subprocess.run(
+                cmd, stdout=subprocess.PIPE, check=False
+            )
             LOG.warning("stdout: %s", pyl_completed_proc.stdout)
             LOG.warning("stderr: %s", pyl_completed_proc.stderr)
             if pyl_completed_proc.returncode != 0:
