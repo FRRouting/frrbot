@@ -469,6 +469,7 @@ curl -s {gisturl} | git apply
         """
         # directory -> label
         label_map = {
+            "alpine": "packaging",
             "babeld": "babel",
             "bfdd": "bfd",
             "bgpd": "bgp",
