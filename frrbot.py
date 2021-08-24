@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 from collections import defaultdict
+from subprocess import CalledProcessError, PIPE, STDOUT
+import subprocess
 import datetime
 import hmac
 import os
 import re
-import subprocess
 import time
 
 import yaml
@@ -247,6 +248,7 @@ class FrrPullRequest:
         cmd = "git -C {} fetch origin {}".format(
             repodir, self.pull_request.base.sha
         ).split(" ")
+        LOG.warning("base SHA: %s\n", self.pull_request.base.sha)
         subprocess.run(cmd, check=False)
         LOG.warning("[+] Resetting to %s", self.pull_request.base.sha)
         cmd = "git -C {} reset --hard {}".format(
@@ -254,7 +256,25 @@ class FrrPullRequest:
         ).split(" ")
         subprocess.run(cmd, check=False)
         LOG.warning("[+] Applying patch")
-        cmd = "git -C {} apply {}".format(repodir, diff_filename).split(" ")
+        # cmd = "git -C {} apply {}".format(repodir, diff_filename).split(" ")
+        cmd = "git -C {} fetch {} {}".format(
+            repodir, self.pull_request.head.repo.clone_url, self.pull_request.head.ref
+        ).split(" ")
+        subprocess.run(cmd, check=False)
+        cmd = "git -C {} merge --no-ff --no-commit FETCH_HEAD".format(repodir).split(
+            " "
+        )
+
+        try:
+            subprocess.run(cmd, stdout=PIPE, stderr=STDOUT, check=True)
+        except subprocess.CalledProcessError as error:
+            LOG.error("[!] Issue applying PR diff: %s", error.output)
+            return None
+
+        # At this point the files are all staged; we need to unstage them, drop
+        # the changes for directories we want to ignore, then re-stage them
+        LOG.warning("[+] Unstaging all files")
+        cmd = "git -C {} reset HEAD -- .".format(repodir).split(" ")
         subprocess.run(cmd, check=False)
         LOG.warning("[+] Applying ignore rules")
         cmd = "git -C {} checkout -- {}".format(repodir, " ".join(ignore)).split(" ")
@@ -375,8 +395,9 @@ class FrrPullRequest:
         if issues["functions"]:
             comment += PR_WARN_BANNED_FUNCTIONS
             nak = True
-        if issues["diff"]["pylint"]:
-            comment += """
+        if issues["diff"]:
+            if issues["diff"]["pylint"]:
+                comment += """
 ---
 
 Pylint found errors in source files changed by this PR:
@@ -386,20 +407,22 @@ Pylint found errors in source files changed by this PR:
 ```
 
 """.format(
-                pylint_report=issues["diff"]["pylint"]
-            )
+                    pylint_report=issues["diff"]["pylint"]
+                )
 
-        if issues["diff"]["style"]:
-            try:
-                gistname = "cr_{}_{}.diff".format(
-                    self.pull_request.number, int(time.time())
-                )
-                files = {gistname: InputFileContent(issues["diff"]["style"])}
-                gist = my_user.create_gist(
-                    True, files, "FRRouting/frr #{}".format(self.pull_request.number)
-                )
-                raw_url = gist.files[gistname].raw_url
-                comment += """
+            if issues["diff"]["style"]:
+                try:
+                    gistname = "cr_{}_{}.diff".format(
+                        self.pull_request.number, int(time.time())
+                    )
+                    files = {gistname: InputFileContent(issues["diff"]["style"])}
+                    gist = my_user.create_gist(
+                        True,
+                        files,
+                        "FRRouting/frr #{}".format(self.pull_request.number),
+                    )
+                    raw_url = gist.files[gistname].raw_url
+                    comment += """
 <details>
 <summary><b>Click for style suggestions</b></summary>
 
@@ -422,12 +445,14 @@ curl -s {gisturl} | git apply
 </p>
 </details>
 
-            """.format(
-                    gisturl=raw_url, stylediff=issues["diff"]["style"]
-                )
+""".format(
+                        gisturl=raw_url, stylediff=issues["diff"]["style"]
+                    )
 
-            except KeyError as error:
-                LOG.warning("[-] Failed to create gist: %s", str(error))
+                except KeyError as error:
+                    LOG.warning("[-] Failed to create gist: %s", str(error))
+        if not issues["diff"]:
+            comment += "Style checking failed; check logs\n"
 
         # dismiss previous reviews if necessary
         if not nak:
