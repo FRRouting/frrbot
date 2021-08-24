@@ -10,7 +10,6 @@ import re
 import time
 
 import yaml
-import pygit2
 import requests
 import dateparser
 import flask
@@ -225,7 +224,9 @@ class FrrPullRequest:
 
         # get repo
         if not os.path.isdir(repodir):
-            pygit2.clone_repository(self.repo.git_url, repodir)
+            LOG.warning("[+] Cloning repository")
+            cmd = "git clone {} {}".format(self.repo.git_url, repodir).split(" ")
+            subprocess.run(cmd, check=True)
 
         # fetch pr diff
         resp = requests.get(self.pull_request.diff_url)
