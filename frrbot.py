@@ -257,6 +257,11 @@ class FrrPullRequest:
             repodir, self.pull_request.base.sha
         ).split(" ")
         subprocess.run(cmd, check=False)
+        LOG.warning("[+] Cleaning")
+        cmd = "git -C {} clean -fdx".format(
+            repodir,
+        ).split(" ")
+        subprocess.run(cmd, check=False)
         LOG.warning("[+] Applying patch")
         # cmd = "git -C {} apply {}".format(repodir, diff_filename).split(" ")
         cmd = "git -C {} fetch {} {}".format(
@@ -271,6 +276,10 @@ class FrrPullRequest:
             subprocess.run(cmd, stdout=PIPE, stderr=STDOUT, check=True)
         except subprocess.CalledProcessError as error:
             LOG.error("[!] Issue applying PR diff: %s", error.output)
+            LOG.warning("[+] Resetting to %s", self.pull_request.base.sha)
+            cmd = "git -C {} reset --hard {}".format(
+                repodir, self.pull_request.base.sha
+            ).split(" ")
             return None
 
         # At this point the files are all staged; we need to unstage them, drop
@@ -288,6 +297,11 @@ class FrrPullRequest:
         result = {}
         result["pylint"] = self.check_pylint(repodir)
         result["style"] = self.check_style(repodir)
+
+        cmd = "git -C {} reset --hard {}".format(
+            repodir, self.pull_request.base.sha
+        ).split(" ")
+        subprocess.run(cmd, check=False)
 
         return result
 
