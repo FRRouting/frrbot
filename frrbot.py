@@ -13,6 +13,7 @@ import yaml
 import requests
 import dateparser
 import flask
+from pylint import epylint as lint
 from flask import Flask
 from flask import Response
 from flask import request
@@ -160,20 +161,20 @@ class FrrPullRequest:
 
         for codefile in pyfiles:
             filename = "{}/{}".format(repodir, codefile.filename)
-            cmd = "pylint --persistent=n --disable=all --enable=E --disable=import-error {}".format(
-                filename
-            ).split(
-                " "
+            LOG.warning("[+] Running pylint on: %s", filename)
+            r = lint.py_run(
+                "{} --persistent=n --disable=all --enable=E -E -r n --disable=import-error".format(
+                    filename
+                ),
+                return_std=True,
             )
-            LOG.warning("[+] Running: %s", cmd)
-            pyl_completed_proc = subprocess.run(
-                cmd, stdout=subprocess.PIPE, check=False
-            )
-            LOG.warning("stdout: %s", pyl_completed_proc.stdout)
-            LOG.warning("stderr: %s", pyl_completed_proc.stderr)
-            if pyl_completed_proc.returncode != 0:
+            pylint_stdout = r[0].read()
+            pylint_stderr = r[1].read()
+            LOG.warning("stdout: %s", pylint_stdout)
+            LOG.warning("stderr: %s", pylint_stderr)
+            if pylint_stdout:
                 result += "Pylint report for {}:\n{}\n\n".format(
-                    filename, pyl_completed_proc.stdout.decode("utf-8")
+                    filename, pylint_stdout
                 )
 
         return result
