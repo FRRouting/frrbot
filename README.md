@@ -19,6 +19,12 @@ Setup
 Running
 -------
 
+Note:
+Because this program invokes git from the shell, it needs to set the
+`user.name` and `user.email` options. Presently it does this globally so it
+will overwrite your configs for these. Running in Docker is recommended until
+this is fixed.
+
 **Option 1: `flask run`**
 
 1. Set environment variable `FLASK_APP=frrbot.py`

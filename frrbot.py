@@ -184,6 +184,16 @@ def load_config():
     return config
 
 
+def initialize_git():
+    """
+    Initialize Git settings
+    """
+    cmd = "git config --global user.name 'polychaeta'".split(" ")
+    subprocess.run(cmd, check=False)
+    cmd = "git config --global user.email 'frrbot@frrouting.org'".split(" ")
+    subprocess.run(cmd, check=False)
+
+
 def initialize_github():
     """
     Initialize GitHub API
@@ -234,6 +244,9 @@ except ConfigNotFoundError as e:
 
 # Initialize GitHub API
 g = initialize_github()
+
+# Initialize Git
+initialize_git()
 
 # Initialize scheduler
 scheduler = initialize_scheduler()
