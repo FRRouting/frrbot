@@ -1,2 +1,3 @@
 gh_webhook_secret: <secret>
 gh_auth_token: <auth> 
+job_store_path: /frrbot/jobs.sqlite

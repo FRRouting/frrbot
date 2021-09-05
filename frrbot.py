@@ -2,12 +2,14 @@
 
 from collections import defaultdict
 from subprocess import CalledProcessError, PIPE, STDOUT
+from logging.config import dictConfig
 import subprocess
 import datetime
 import hmac
 import os
 import re
 import time
+import pprint
 
 import yaml
 import requests
@@ -51,7 +53,6 @@ If you are a new contributor to FRR, please see our [contributing guidelines](ht
 
 After making changes, you do not need to create a new PR. You should perform an [amend or interactive rebase](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History) followed by a [force push](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force).
 """
-
 
 # Scheduler functions ----------------------------------------------------------
 
@@ -108,33 +109,135 @@ def cancel_close_issue(issue):
 
 # Module init ------------------------------------------------------------------
 
-print("[+] Loading config")
+# configure logging
+dictConfig(
+    {
+        "version": 1,
+        "formatters": {
+            "default": {
+                "format": "[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+            }
+        },
+        "handlers": {
+            "wsgi": {
+                "class": "logging.StreamHandler",
+                "stream": "ext://flask.logging.wsgi_errors_stream",
+                "formatter": "default",
+            }
+        },
+        "root": {"level": "INFO", "handlers": ["wsgi"]},
+    }
+)
 
-with open("config.yaml", "r") as conffile:
-    conf = yaml.safe_load(conffile)
-    whsec = conf["gh_webhook_secret"]
-    auth = conf["gh_auth_token"]
-
-print("[+] Github auth token: {}".format(auth))
-print("[+] Github webhook secret: {}".format(whsec))
-
-# Initialize GitHub API
-g = Github(auth)
-my_user = g.get_user()
-print("[+] Initialized GitHub API object")
-
-# Initialize scheduler
-jobstores = {"default": SQLAlchemyJobStore(url="sqlite:///jobs.sqlite")}
-scheduler = BackgroundScheduler(jobstores=jobstores)
-scheduler.start()
-print("[+] Initialized scheduler")
-print("[+] Current jobs:")
-scheduler.print_jobs()
-
-# Initialize Flask app
 app = Flask(__name__)
 LOG = flask.logging.create_logger(app)
-print("[+] Initialized Flask app")
+
+
+class ConfigNotFoundError(Exception):
+    pass
+
+
+def load_config():
+    """
+    Load configuration.
+
+    Configuration can be passed two ways:
+    * By setting fields in config.yaml
+    * Through environment variables
+
+    Environment variables take precedence over config.yaml if both are present.
+
+    Returns dictionary containing config.
+    Raises ConfigNotFound if any of the required config items aren't found.
+    """
+    LOG.info("[+] Loading config")
+
+    config = {
+        "gh_webhook_secret": None,
+        "gh_auth_token": None,
+        "job_store_path": None,
+    }
+
+    # Load what we can from the config file first
+    try:
+        with open("config.yaml", "r") as conffile:
+            file_conf = yaml.safe_load(conffile)
+            for key in config.keys():
+                try:
+                    config[key] = file_conf[key]
+                except KeyError:
+                    pass
+    except OSError:
+        LOG.warning("[!] Can't open config.yaml (might not exist or bad permissions)")
+
+    # Load what we can from the environment next
+    for key in config.keys():
+        config[key] = os.getenv(key.upper()) or config[key]
+
+    # Verify all config is present
+    for key, val in config.items():
+        if not val:
+            raise ConfigNotFoundError(
+                "Missing required configuration for: {}".format(key)
+            )
+
+    return config
+
+
+def initialize_github():
+    """
+    Initialize GitHub API
+
+    Returns instance of Github
+    """
+    g = Github(config["gh_auth_token"])
+    LOG.info("[+] Initialized GitHub API object")
+    return g
+
+
+def initialize_scheduler():
+    """
+    Initialize APScheduler, loading jobs database from disk if present
+
+    Returns instance of BackgroundScheduler
+    """
+    if not os.path.exists(config["job_store_path"]):
+        LOG.warning(
+            "[!] Specified job store '%s' does not exist; creating one",
+            config["job_store_path"],
+        )
+    jobstores = {
+        "default": SQLAlchemyJobStore(
+            url="sqlite:///{}".format(config["job_store_path"])
+        )
+    }
+    scheduler = BackgroundScheduler(jobstores=jobstores)
+    scheduler.start()
+    jobs = scheduler.get_jobs()
+    LOG.info("[+] Initialized scheduler")
+    LOG.info("[+] Current jobs (%d):", len(jobs))
+    for job in jobs:
+        LOG.info("ID: %s", job.id)
+        LOG.info("\tName: %s", job.name)
+        LOG.info("\tFunc: %s", job.func)
+        LOG.info("\tWhen: %s", job.next_run_time)
+    return scheduler
+
+
+# Load config
+try:
+    config = load_config()
+    LOG.info("[+] Configuration:\n%s", pprint.pformat(config))
+except ConfigNotFoundError as e:
+    LOG.error("[!] Error while loading configuration: %s", e)
+    exit(1)
+
+# Initialize GitHub API
+g = initialize_github()
+
+# Initialize scheduler
+scheduler = initialize_scheduler()
+
 
 # Pull request management ------------------------------------------------------
 
@@ -432,7 +535,7 @@ Pylint found errors in source files changed by this PR:
                         self.pull_request.number, int(time.time())
                     )
                     files = {gistname: InputFileContent(issues["diff"]["style"])}
-                    gist = my_user.create_gist(
+                    gist = g.get_user().create_gist(
                         True,
                         files,
                         "FRRouting/frr #{}".format(self.pull_request.number),
@@ -473,7 +576,10 @@ curl -s {gisturl} | git apply
         # dismiss previous reviews if necessary
         if not nak:
             for review in self.pull_request.get_reviews():
-                if review.user.id == my_user.id and review.state == "CHANGES_REQUESTED":
+                if (
+                    review.user.id == g.get_user().id
+                    and review.state == "CHANGES_REQUESTED"
+                ):
                     review.dismiss("blocking comments addressed")
 
         # Post review
@@ -675,7 +781,7 @@ def issue_comment_created(j):
     had_verb = False
 
     for verb, handler in verbs.items():
-        trigger_me = "@{} {}".format(my_user.login, verb)
+        trigger_me = "@{} {}".format(g.get_user().login, verb)
         if trigger_me.lower() in body.lower():
             LOG.warning("[+] Found trigger '%s'", verb)
             partition = body.lower().partition(trigger_me.lower())
@@ -787,7 +893,7 @@ def handle_webhook(req):
 
     try:
         sender = j["sender"]["login"]
-        if sender == my_user.login:
+        if sender == g.get_user().login:
             LOG.warning("[+] Ignoring event triggered by me")
             return Response("OK", 200)
     except KeyError:
@@ -808,7 +914,10 @@ def gh_sig_valid(req):
     :param req: The GitHub request
     """
     mydigest = (
-        "sha1=" + hmac.HMAC(bytes(whsec, "utf8"), req.get_data(), "sha1").hexdigest()
+        "sha1="
+        + hmac.HMAC(
+            bytes(config["gh_webhook_secret"], "utf8"), req.get_data(), "sha1"
+        ).hexdigest()
     )
     ghdigest = req.headers["X_HUB_SIGNATURE"]
     comp = hmac.compare_digest(ghdigest, mydigest)

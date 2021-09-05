@@ -14,6 +14,7 @@ Setup
    `gh_webhook_secret` field in `config.yaml`
 7. Generate an auth token for the account you want the bot to use and put it in
    the `gh_auth_token field` in `config.yaml`
+8. Set `job_store_path` to the desired path to write the sqlite job store.
 
 Running
 -------
