@@ -31,3 +31,20 @@ Running
 1. Install [uwsgi](https://uwsgi-docs.readthedocs.io/en/latest/)
 2. Use `./run.sh` to create and mount a WSGI endpoint on `/frrbot` and configure
    your web server to WSGI proxy your payload URL to it
+
+**Option 3: Docker**
+
+1. `docker build .`
+2. `docker run -e GH_WEBHOOK_SECRET=<secret> -e GH_AUTH_TOKEN=<token> -e JOB_STORE_PATH=<path> --port 80:80 <image>`
+3. frrbot will be listening on `0.0.0.0:80/frrbot`
+
+Since the job store should outlive the container, you should mount a volume
+where the job store should live from the host into the container before running
+and set `JOB_STORE_PATH` appropriately. For example:
+
+```
+docker run --mount type=bind,source=/opt/frrbot,target=/frrbot -e GH_WEBHOOK_SECRET=<secret> -e GH_AUTH_TOKEN=<token> -e JOB_STORE_PATH=/frrbot/jobstore.sqlite <image>
+```
+
+uWSGI options within the container can be modified by changing `uwsgi.ini` in
+this repository root and rebuilding the container.
