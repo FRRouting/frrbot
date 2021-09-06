@@ -10,7 +10,7 @@ Setup
 3. Install [poetry](https://python-poetry.org/docs/#osx-linux-bashonwindows-install-instructions)
 4. `poetry install`
 5. Create and configure a GitHub App on GitHub, save the webhook secret, APP ID
-   or private key
+   and private key
 6. Copy `config.yaml.example` to `config.yaml` and fill in the fields appropriately
 
 Running
