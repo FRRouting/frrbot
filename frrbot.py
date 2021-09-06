@@ -216,6 +216,7 @@ def initialize_github(app, config):
             "Configured path to GitHub App PEM key file is inaccessible: '%s'",
             config["gh_app_pkey_pem_path"],
         )
+        raise ConfigNotFoundError("Cannot access key file")
 
     return GitHubApp(app)
 
@@ -257,14 +258,20 @@ except ConfigNotFoundError as e:
     LOG.error("[!] Error while loading configuration: %s", e)
     sys.exit(1)
 
-# Initialize GitHub API
-ghapp = initialize_github(app, config)
 
 # Initialize Git
 initialize_git()
 
 # Initialize scheduler
 scheduler = initialize_scheduler()
+
+# Initialize GitHub App
+try:
+    ghapp = initialize_github(app, config)
+except ConfigNotFoundError as e:
+    LOG.error("[!] Error while initializing GitHub App: %s", e)
+    sys.exit(2)
+
 
 # Pull request management ------------------------------------------------------
 
