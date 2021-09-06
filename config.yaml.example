@@ -1,4 +1,5 @@
 gh_webhook_secret: <secret>
 gh_app_id: <id>
 gh_app_pkey_pem_path: /frrbot/app.pem
+gh_app_route: /gh
 job_store_path: /frrbot/jobs.sqlite

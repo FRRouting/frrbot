@@ -16,12 +16,17 @@ Setup
 Running
 -------
 
-Note:
+Notes:
 
-Because this program invokes git from the shell, it needs to set the
-`user.name` and `user.email` options. Presently it does this globally so it
-will overwrite your configs for these. Running in Docker is recommended until
-this is fixed.
+* Because this program invokes git from the shell, it needs to set the
+  `user.name` and `user.email` options. Presently it does this globally so it
+  will overwrite your configs for these. Running in Docker is recommended until
+  this is fixed.
+
+* When setting `gh_app_route`, remember that this is relative to the uWSGI
+  mountpoint. So for example if your uWSGI mountpoint is `/frrbot` and you set
+  `gp_app_route` to `/gh`, the full URL that frrbot will listen for GitHub
+  webhooks on will be `/frrbot/gh`.
 
 **Option 1: `flask run`**
 
@@ -41,8 +46,8 @@ this is fixed.
 **Option 3: Docker**
 
 1. `docker build --tag frrbot:latest .`
-2. `docker run -e GH_WEBHOOK_SECRET=<secret> GH_APP_ID=<ID> -e GH_APP_PKEY_PEM_PATH=<path> -e JOB_STORE_PATH=<path> --port 80:80 frrbot:latest`
-3. frrbot will be listening on `0.0.0.0:80/frrbot`
+2. `docker run -e GH_WEBHOOK_SECRET=<secret> GH_APP_ROUTE="/gh" GH_APP_ID=<ID> -e GH_APP_PKEY_PEM_PATH=<path> -e JOB_STORE_PATH=<path> --port 80:80 frrbot:latest`
+3. frrbot will be listening on `0.0.0.0:80/frrbot/gh`
 
 
 Notes for docker:
@@ -52,6 +57,8 @@ Notes for docker:
   desired
 * `GH_WEBHOOK_SECRET` should be the webhook secret used to authenticate requests from GitHub
 * `GH_APP_ID` should be the ID of your GitHub App
+* `GP_APP_ROUTE` should be the URL you want to listen for webhooks on
+  *relative to the uWSGI mountpoint*
 * `GH_APP_PKEY_PEM_PATH` should be the absolute path to the PEM format private
   key associated with your GitHub App; you should mount the key into the
   container at that path

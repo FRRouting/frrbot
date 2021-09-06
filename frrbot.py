@@ -160,6 +160,7 @@ def load_config():
         "gh_app_pkey_pem_path": None,
         "gh_webhook_secret": None,
         "gh_app_id": None,
+        "gh_app_route": None,
         "job_store_path": None,
     }
 
@@ -205,6 +206,7 @@ def initialize_github(app, config):
     """
     app.config["GITHUBAPP_ID"] = config["gh_app_id"]
     app.config["GITHUBAPP_SECRET"] = config["gh_webhook_secret"]
+    app.config["GITHUBAPP_ROUTE"] = config["gh_app_route"]
 
     try:
         with open(config["gh_app_pkey_pem_path"]) as keyfile:
