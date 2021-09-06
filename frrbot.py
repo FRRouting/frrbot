@@ -18,7 +18,6 @@ import flask
 from pylint import epylint as lint
 from flask import Flask
 from flask import request
-from flask import jsonify
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from github import Github
@@ -59,50 +58,53 @@ After making changes, you do not need to create a new PR. You should perform an 
 # Scheduler functions ----------------------------------------------------------
 
 
-def close_issue(issue):
+def scheduler_make_id_issue(repo, issue):
+    return "{}@@@{}".format(repo["full_name"], issue["id"])
+
+
+def close_issue(repo, issue):
     """
     Immediately close the named issue
 
-    :param str: repository name
-    :param int: issue number
+    :param dict repo: repository issue is in
+    :param dict issue: issue to close
     """
     LOG.info("[+] Closing issue #%d", issue["number"])
     client = ghapp.client()
     client.issues.update(
-        issue["repo"]["owner"], issue["repo"]["name"], issue["number"], state="closed"
+        repo["owner"]["login"], repo["name"], issue["number"], state="closed"
     )
-    client.issues.remove_label(
-        issue["repo"]["owner"], issue["repo"]["name"], TRIGGER_LABEL
-    )
+    client.issues.remove_label(repo["owner"]["login"], repo["name"], TRIGGER_LABEL)
 
 
-def schedule_close_issue(issue, when):
+def schedule_close_issue(repo, issue, when):
     """
     Schedule an issue to be automatically closed on a certain date.
 
-    :param github.Issue.Issue issue: issue to close
+    :param dict repo: repository issue is in
+    :param dict issue: issue to close
     :param datetime.datetime when: When to close the issue
     """
-    issueid = "{}@@@{}".format(issue["repo"]["full_name"], issue["id"])
+    issueid = scheduler_make_id_issue(repo, issue)
     LOG.warning(
-        "[-] Scheduling issue %d for autoclose (id: %d)", issue["number"], issueid
+        "[-] Scheduling issue %d for autoclose (id: %d)", issue["number"], issue["id"]
     )
     scheduler.add_job(
         close_issue,
         run_date=when,
-        args=[issue],
+        args=[repo, issue],
         id=issueid,
         replace_existing=True,
     )
 
 
-def cancel_close_issue(issue):
+def cancel_close_issue(repo, issue):
     """
     Dechedule an issue to be automatically closed on a certain date.
 
     :param github.Issue.Issue issue: issue to cancel
     """
-    issueid = "{}@@@{}".format(issue["repo"]["full_name"], issue["id"])
+    issueid = scheduler_make_id_issue(repo, issue)
     LOG.warning("[-] Descheduling issue #%d for closing", issue["number"])
     scheduler.remove_job(issueid)
 
@@ -275,10 +277,13 @@ class FrrPullRequest:
         self.repo_tuple = (self.repo["owner"]["login"], self.repo["name"])
 
     def _get_pyfiles(self):
-        pyfiles = paged(
-            self.client.pulls.list_files(*self.repo_tuple, self.pull_request["number"])
+        pyfiles_pages = paged(
+            self.client.pulls.list_files, *self.repo_tuple, self.pull_request["number"]
         )
-        pyfiles = [f for f in pyfiles if f["filename"].endswith(".py")]
+        pyfiles = [
+            [f for f in page if f["filename"].endswith(".py")] for page in pyfiles_pages
+        ]
+        pyfiles = [item for sublist in pyfiles for item in sublist]
         return pyfiles
 
     def check_pylint(self, repodir):
@@ -291,7 +296,7 @@ class FrrPullRequest:
         result = ""
 
         for codefile in pyfiles:
-            filename = "{}/{}".format(repodir, codefile.filename)
+            filename = "{}/{}".format(repodir, codefile["filename"])
             LOG.warning("[+] Running pylint on: %s", filename)
             r = lint.py_run(
                 "{} --persistent=n --disable=all --enable=E -E -r n --disable=import-error".format(
@@ -325,7 +330,7 @@ class FrrPullRequest:
         pyfiles = self._get_pyfiles()
 
         for codefile in pyfiles:
-            filename = "{}/{}".format(repodir, codefile.filename)
+            filename = "{}/{}".format(repodir, codefile["filename"])
             cmd = "python3 -m black {}".format(filename).split(" ")
             LOG.warning("[+] Running: %s", cmd)
             subprocess.run(cmd, check=False)
@@ -448,36 +453,35 @@ class FrrPullRequest:
         Returns a dict indicating whether each of the above is true for any commit
         in the PR.
         """
-        commits = paged(
-            self.client.pulls.list_commits(
-                self.repo["owner"]["login"],
-                self.repo["name"],
-                self.pull_request["number"],
-            )
-        )
-
         warns = defaultdict(bool)
 
-        for commit in commits:
-            msg = commit["commit"]["message"]
+        commit_pages = paged(
+            self.client.pulls.list_commits,
+            *self.repo_tuple,
+            self.pull_request["number"]
+        )
 
-            if len(msg) == 0:
-                LOG.warning("[-] Zero length commit message; weird")
-                continue
+        for page in commit_pages:
+            for commit in page:
+                msg = commit["commit"]["message"]
 
-            if msg.startswith("Revert") or msg.startswith("Merge"):
-                continue
+                if len(msg) == 0:
+                    LOG.warning("[-] Zero length commit message; weird")
+                    continue
 
-            lines = msg.split("\n")
+                if msg.startswith("Revert") or msg.startswith("Merge"):
+                    continue
 
-            if len(lines) < 2 or len(lines[1]) > 0:
-                warns["blankln"] = True
+                lines = msg.split("\n")
 
-            if ":" not in lines[0]:
-                warns["bad_msg"] = True
+                if len(lines) < 2 or len(lines[1]) > 0:
+                    warns["blankln"] = True
 
-            if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
-                warns["signoff"] = True
+                if ":" not in lines[0]:
+                    warns["bad_msg"] = True
+
+                if not re.search(r"Signed-off-by: .* <.*@.*>", msg):
+                    warns["signoff"] = True
 
         return warns
 
@@ -513,10 +517,7 @@ class FrrPullRequest:
 
         issues["commits"] = self.check_commits()
 
-        try:
-            issues["diff"] = self.check_diff()
-        except Exception as error:
-            LOG.warning("[-] Style/lint checking failed:\n%s", str(error))
+        issues["diff"] = self.check_diff()
 
         try:
             issues["functions"] = self.check_functions()
@@ -585,68 +586,50 @@ Pylint found errors in source files changed by this PR:
         if not issues["diff"]:
             comment += "Style checking failed; check logs\n"
 
-        # dismiss previous reviews if necessary
-        if not nak:
-            reviews = paged(
-                self.client.pulls.list_reviews(
-                    self.repo["owner"]["login"],
-                    self.repo["name"],
-                    self.pull_request["number"],
-                )
-            )
-            for review in reviews:
-                if (
-                    review["user"]["id"] == self.client.users.get_authenticated()["id"]
-                    and review["state"] == "CHANGES_REQUESTED"
-                ):
-                    self.client.pulls.dismiss_review(
-                        self.repo["owner"]["login"],
-                        self.repo["name"],
-                        self.pull_request["number"],
-                        review["id"],
-                        "blocking comments addressed",
-                    )
-
-        # Post review
+        # Post check run
         if comment != "":
             comment = PR_GREETING_MSG + comment
             comment += PR_GUIDELINES_REF_MSG
             event = "COMMENT" if not nak else "REQUEST_CHANGES"
-            self.client.pulls.create_review(
+        try:
+            state = "success"
+            description = "OK"
+
+            if nak:
+                state = "failure"
+                description = "Blocking issues found"
+            elif comment:
+                state = "neutral"
+                description = "Style and/or linter errors found"
+
+            commits_paged = paged(
+                self.client.pulls.list_commits,
                 self.repo["owner"]["login"],
                 self.repo["name"],
                 self.pull_request["number"],
-                body=comment,
-                event=event,
-            )
-
-        try:
-            state = "success" if not nak else "failure"
-            description = "OK" if not nak else "Problems found"
-            description = (
-                "OK - but has style issues" if not nak and comment else description
-            )
-            commits = paged(
-                self.client.pulls.list_commits(
-                    self.repo["owner"]["login"],
-                    self.repo["name"],
-                    self.pull_request["number"],
-                )
             )
             last_commit = None
-            for last_commit in commits:
-                pass
-            LOG.warning(last_commit)
+            for page in commits_paged:
+                for last_commit in page:
+                    pass
 
-            # XXX: replace with checks
-            # last_commit.create_status(
-            #     state=state,
-            #     description=description,
-            #     target_url="",
-            #     context="polychaeta",
-            # )
+            output = {
+                "title": description,
+                "summary": description,
+            }
+
+            if comment != "":
+                output["text"] = comment
+
+            self.client.checks.create(
+                *self.repo_tuple,
+                name="frrbot",
+                head_sha=last_commit["sha"],
+                conclusion=state,
+                output=output
+            )
         except Exception as error:
-            LOG.warning("Error while making status: %s", str(error))
+            LOG.warning("Error while making check: %s", str(error))
 
         return comment
 
@@ -696,31 +679,31 @@ Pylint found errors in source files changed by this PR:
             "bootstrap.sh": "build",
         }
 
-        commits = paged(
-            self.client.pulls.list_commits(
-                *self.repo_tuple, self.pull_request["number"]
-            )
-        )
         labels = set()
+        commit_pages = paged(
+            self.client.pulls.list_commits,
+            *self.repo_tuple,
+            self.pull_request["number"]
+        )
+        for page in commit_pages:
+            for commit in page:
+                msg = commit["commit"]["message"]
+                match = re.match(r"^([^:\n]+):", msg)
+                if match:
+                    lbls = match.groups()[0].split(",")
+                    lbls = map(lambda x: x.strip(), lbls)
+                    lbls = map(lambda x: x.lower(), lbls)
+                    lbls = filter(lambda x: x in label_map, lbls)
+                    lbls = map(lambda x: label_map[x], lbls)
+                    labels = labels | set(lbls)
 
-        for commit in commits:
-            msg = commit["commit"]["message"]
-            match = re.match(r"^([^:\n]+):", msg)
-            if match:
-                lbls = match.groups()[0].split(",")
-                lbls = map(lambda x: x.strip(), lbls)
-                lbls = map(lambda x: x.lower(), lbls)
-                lbls = filter(lambda x: x in label_map, lbls)
-                lbls = map(lambda x: label_map[x], lbls)
-                labels = labels | set(lbls)
-
-            lines = msg.split("\n")
-            if lines[0].find("fix") != -1 or msg.find("Fixes:") != -1:
-                labels.add("bugfix")
+                lines = msg.split("\n")
+                if lines[0].find("fix") != -1 or msg.find("Fixes:") != -1:
+                    labels.add("bugfix")
 
         if labels:
             self.client.issues.add_labels(
-                *self.repo_tuple, self.pull_request["number"], labels
+                *self.repo_tuple, self.pull_request["number"], list(labels)
             )
 
 
@@ -741,7 +724,7 @@ def issue_labeled():
 
     def label_autoclose():
         closedate = datetime.datetime.now() + datetime.timedelta(weeks=1)
-        schedule_close_issue(issue, closedate)
+        schedule_close_issue(repo, issue, closedate)
         client.issues.create_comment(
             repo["owner"]["login"], repo["name"], issue["number"], AUTO_CLOSE_MSG
         )
@@ -791,9 +774,9 @@ def issue_comment_created():
     sender = j["sender"]["login"]
     perm = client.repos.get_collaborator_permission_level(
         repo["owner"]["login"], repo["name"], sender
-    )
+    )["permission"]
 
-    LOG.info("PERMISSION LEVEL: %s", perm)
+    LOG.info("Permission level for '%s': %s", sender, perm)
 
     def verb_autoclose(arg):
         """
@@ -809,13 +792,13 @@ def issue_comment_created():
             LOG.warning(
                 "[-] User '%s' (%s) isn't authorized to use this command", sender, perm
             )
-            return
+            return "Ok"
 
         closedate = dateparser.parse(arg.strip())
         if closedate is not None and closedate > datetime.datetime.now():
-            schedule_close_issue(issue, closedate)
+            schedule_close_issue(repo, issue, closedate)
             client.issues.add_labels(
-                repo["owner"]["login"], repo["name"], ["autoclose"]
+                repo["owner"]["login"], repo["name"], issue["number"], ["autoclose"]
             )
             client.reactions.create_for_issue_comment(
                 repo["owner"]["login"], repo["name"], j["comment"]["id"], "+1"
@@ -848,10 +831,7 @@ def issue_comment_created():
     had_verb = False
 
     for verb, handler in verbs.items():
-        break
-        authenticated = client.apps.get_authenticated()
-        LOG.info(pprint.pformat(authenticated))
-        trigger_me = "@{} {}".format(client.apps.get_authenticated()["slug"], verb)
+        trigger_me = "@frrbot {}".format(verb)
         if trigger_me.lower() in body.lower():
             LOG.warning("[+] Found trigger '%s'", verb)
             partition = body.lower().partition(trigger_me.lower())
@@ -859,23 +839,21 @@ def issue_comment_created():
             handler(partition[2])
             had_verb = True
 
-    client.issues.remove_label(
-        repo["owner"]["login"], repo["name"], issue["number"], TRIGGER_LABEL
-    )
-
-    issueid = "{}@@@{}".format(repo["full_name"], issue["number"])
+    issueid = scheduler_make_id_issue(repo, issue)
     if not had_verb and scheduler.get_job(issueid) is not None:
         scheduler.remove_job(issueid)
-        client.issues.remove_label(repo["owner"]["login"], repo["name"], TRIGGER_LABEL)
+        client.issues.remove_label(
+            repo["owner"]["login"], repo["name"], issue["number"], TRIGGER_LABEL
+        )
         client.issues.create_comment(
             repo["owner"]["login"], repo["name"], issue["number"], NO_AUTO_CLOSE_MSG
         )
 
-    return jsonify(success=True)
+    return "Ok"
 
 
-@ghapp.on("pull_request.synchronized")
-@ghapp.on("pull_request.opened")
+@ghapp.on("pull_request.synchronize")
+@ghapp.on("pull_request.open")
 def pull_request_opened_or_synchronized():
     """
     Handle a pull request being opened or synchronized.
@@ -896,7 +874,7 @@ def pull_request_opened_or_synchronized():
     pull_request.add_labels()
     pull_request.review()
 
-    return jsonify(success=True)
+    return "Ok"
 
 
 # Flask hooks ------------------------------------------------------------------
