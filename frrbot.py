@@ -625,6 +625,7 @@ Pylint found errors in source files changed by this PR:
             self.client.checks.create(
                 *self.repo_tuple,
                 name="frrbot",
+                details_url=self.pull_request["html_url"] + "/checks",
                 head_sha=last_commit["sha"],
                 conclusion=state,
                 output=output
