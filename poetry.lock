@@ -370,17 +370,6 @@ docs = ["Sphinx (>=4)", "furo (>=2021.7.5b38)", "proselint (>=0.10.2)", "sphinx-
 test = ["appdirs (==1.4.4)", "pytest (>=6)", "pytest-cov (>=2.7)", "pytest-mock (>=3.6)"]
 
 [[package]]
-name = "pretty-traceback"
-version = "2021.1017"
-description = "Human readable stacktraces."
-category = "main"
-optional = false
-python-versions = ">=2.7"
-
-[package.dependencies]
-colorama = {version = ">=0.4", markers = "python_version >= \"3.6\""}
-
-[[package]]
 name = "pycparser"
 version = "2.20"
 description = "C parser in Python"
@@ -648,7 +637,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytes
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.6"
-content-hash = "918a26e81238bdd9f0733dac6527ebec2216fbd7f61b61e57369666cbfa7719a"
+content-hash = "b3885d74840670123209362492c79b78ee08a2b489a30a4f90ffdb076419fd5f"
 
 [metadata.files]
 appdirs = [
@@ -947,10 +936,6 @@ pathspec = [
 platformdirs = [
     {file = "platformdirs-2.3.0-py3-none-any.whl", hash = "sha256:8003ac87717ae2c7ee1ea5a84a1a61e87f3fbd16eb5aadba194ea30a9019f648"},
     {file = "platformdirs-2.3.0.tar.gz", hash = "sha256:15b056538719b1c94bdaccb29e5f81879c7f7f0f4a153f46086d155dffcd4f0f"},
-]
-pretty-traceback = [
-    {file = "pretty-traceback-2021.1017.tar.gz", hash = "sha256:b5a9171d72c66eebaa666aa117e3d7d5e0ea1c249fbfd83889713249f1baba0c"},
-    {file = "pretty_traceback-2021.1017-py2.py3-none-any.whl", hash = "sha256:d819146c6678a3b2e976bb4ddf6e19d581f6b14324165fed657f6253235d2993"},
 ]
 pycparser = [
     {file = "pycparser-2.20-py2.py3-none-any.whl", hash = "sha256:7582ad22678f0fcd81102833f60ef8d0e57288b6b5fb00323d101be910e35705"},
