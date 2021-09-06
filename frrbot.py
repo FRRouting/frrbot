@@ -778,7 +778,7 @@ def issue_comment_created():
         :param arg str: automatically close this issue in <arg>, where <arg> is
         a time period in the future or a date. For instance, time period could
         be "in 1 day" to close the issue in 1 day, or "May 25th" to specify the
-        next occurring May 15th.
+        next occurring May 25th.
         """
         if not perm in ("write", "admin"):
             LOG.warning(
