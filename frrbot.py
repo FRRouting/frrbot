@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
 from collections import defaultdict
-from subprocess import CalledProcessError, PIPE, STDOUT
+from subprocess import PIPE, STDOUT
 from logging.config import dictConfig
 import subprocess
 import datetime
-import hmac
 import os
 import re
-import time
 import pprint
+import sys
 
 import yaml
 import requests
@@ -17,13 +16,8 @@ import dateparser
 import flask
 from pylint import epylint as lint
 from flask import Flask
-from flask import request
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
-from github import Github
-from github import GithubException
-from github import InputFileContent
-from werkzeug.exceptions import BadRequest
 from ghapi.all import paged
 from flask_githubapplication import GitHubApp
 
@@ -59,6 +53,12 @@ After making changes, you do not need to create a new PR. You should perform an 
 
 
 def scheduler_make_id_issue(repo, issue):
+    """
+    Make database ID for issue
+
+    :param dict repo: repository issue is in
+    :param dict issue: issue to make id for
+    """
     return "{}@@@{}".format(repo["full_name"], issue["id"])
 
 
@@ -136,7 +136,9 @@ LOG = flask.logging.create_logger(app)
 
 
 class ConfigNotFoundError(Exception):
-    pass
+    """
+    Exception thrown when a configuration key cannot be found.
+    """
 
 
 def load_config():
@@ -163,9 +165,9 @@ def load_config():
 
     # Load what we can from the config file first
     try:
-        with open("config.yaml", "r") as conffile:
+        with open("config.yaml", "r", encoding="utf-8") as conffile:
             file_conf = yaml.safe_load(conffile)
-            for key in config.keys():
+            for key in config:
                 try:
                     config[key] = file_conf[key]
                 except KeyError:
@@ -174,7 +176,7 @@ def load_config():
         LOG.warning("[!] Can't open config.yaml (might not exist or bad permissions)")
 
     # Load what we can from the environment next
-    for key in config.keys():
+    for key in config:
         config[key] = os.getenv(key.upper()) or config[key]
 
     # Verify all config is present
@@ -251,7 +253,7 @@ try:
     LOG.info("[+] Configuration:\n%s", pprint.pformat(config))
 except ConfigNotFoundError as e:
     LOG.error("[!] Error while loading configuration: %s", e)
-    exit(1)
+    sys.exit(1)
 
 # Initialize GitHub API
 ghapp = initialize_github(app, config)
@@ -377,7 +379,7 @@ class FrrPullRequest:
             LOG.warning("[-] diff at '%s' is empty", self.pull_request["diff_url"])
             return None
         diff_filename = "/tmp/pr_{}.diff".format(self.pull_request["number"])
-        with open(diff_filename, "w") as change:
+        with open(diff_filename, "w", encoding="utf-8") as change:
             change.write(resp.text)
 
         # Apply diff
@@ -590,7 +592,6 @@ Pylint found errors in source files changed by this PR:
         if comment != "":
             comment = PR_GREETING_MSG + comment
             comment += PR_GUIDELINES_REF_MSG
-            event = "COMMENT" if not nak else "REQUEST_CHANGES"
         try:
             state = "success"
             description = "OK"
@@ -792,7 +793,7 @@ def issue_comment_created():
             LOG.warning(
                 "[-] User '%s' (%s) isn't authorized to use this command", sender, perm
             )
-            return "Ok"
+            return
 
         closedate = dateparser.parse(arg.strip())
         if closedate is not None and closedate > datetime.datetime.now():
@@ -882,4 +883,7 @@ def pull_request_opened_or_synchronized():
 
 @app.route("/health")
 def index():
+    """
+    Health check endpoint
+    """
     return "Ok"
