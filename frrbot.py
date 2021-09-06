@@ -498,10 +498,10 @@ class FrrPullRequest:
                 self.pull_request["diff_url"],
                 resp.status_code,
             )
-            return None
+            return False
         if len(resp.text) == 0:
             LOG.warning("[-] diff at '%s' is empty", self.pull_request["diff_url"])
-            return None
+            return False
 
         added = [x for x in resp.text.split("\n") if x.startswith("+")]
         banned_regexp = [r"\s{}\(".format(x[0]) for x in BANNED_FUNCTIONS]
@@ -513,28 +513,23 @@ class FrrPullRequest:
 
     def check(self):
         """
-        Perform all checks on this PR
+        Perform check run on this PR
         """
+        LOG.info("[+] Checking #%d", self.pull_request["number"])
+
+        # Post check run start
+        check = self.client.checks.create(
+            *self.repo_tuple,
+            name="frrbot",
+            details_url=self.pull_request["html_url"] + "/checks",
+            head_sha=self.pull_request["head"]["sha"],
+            status="in_progress"
+        )
+
         issues = defaultdict(lambda: None)
-
         issues["commits"] = self.check_commits()
-
         issues["diff"] = self.check_diff()
-
-        try:
-            issues["functions"] = self.check_functions()
-        except Exception as error:
-            LOG.warning("[-] Function checking failed:\n%s", str(error))
-
-        return issues
-
-    def review(self):
-        """
-        Perform all checks on this PR and leave a review if there are problems
-        """
-        issues = self.check()
-
-        LOG.warning("[+] Reviewing #%d", self.pull_request["number"])
+        issues["functions"] = self.check_functions()
 
         comment = ""
         nak = False
@@ -588,50 +583,36 @@ Pylint found errors in source files changed by this PR:
         if not issues["diff"]:
             comment += "Style checking failed; check logs\n"
 
-        # Post check run
         if comment != "":
             comment = PR_GREETING_MSG + comment
             comment += PR_GUIDELINES_REF_MSG
-        try:
-            state = "success"
-            description = "OK"
 
-            if nak:
-                state = "failure"
-                description = "Blocking issues found"
-            elif comment:
-                state = "neutral"
-                description = "Style and/or linter errors found"
+        state = "success"
+        description = "OK"
 
-            commits_paged = paged(
-                self.client.pulls.list_commits,
-                self.repo["owner"]["login"],
-                self.repo["name"],
-                self.pull_request["number"],
-            )
-            last_commit = None
-            for page in commits_paged:
-                for last_commit in page:
-                    pass
+        if nak:
+            state = "failure"
+            description = "Blocking issues found"
+        elif comment:
+            state = "neutral"
+            description = "Style and/or linter errors found"
 
-            output = {
-                "title": description,
-                "summary": description,
-            }
+        output = {
+            "title": description,
+            "summary": description,
+        }
 
-            if comment != "":
-                output["text"] = comment
+        if comment != "":
+            output["text"] = comment
 
-            self.client.checks.create(
-                *self.repo_tuple,
-                name="frrbot",
-                details_url=self.pull_request["html_url"] + "/checks",
-                head_sha=last_commit["sha"],
-                conclusion=state,
-                output=output
-            )
-        except Exception as error:
-            LOG.warning("Error while making check: %s", str(error))
+        self.client.checks.update(
+            *self.repo_tuple,
+            check_run_id=check["id"],
+            name="frrbot",
+            details_url=self.pull_request["html_url"] + "/checks",
+            conclusion=state,
+            output=output
+        )
 
         return comment
 
@@ -814,7 +795,7 @@ def issue_comment_created():
             repo,
             client.pulls.get(repo["owner"]["login"], repo["name"], issue["number"]),
         )
-        pull_request.review()
+        pull_request.check()
 
     def verb_badreport(_):
         client.issues.create_comment(
@@ -874,7 +855,7 @@ def pull_request_opened_or_synchronized():
 
     pull_request = FrrPullRequest(client, repo, pr)
     pull_request.add_labels()
-    pull_request.review()
+    pull_request.check()
 
     return "Ok"
 
