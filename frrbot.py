@@ -762,8 +762,12 @@ def issue_comment_created():
     repo = j["repository"]
     issue = j["issue"]
 
+    if j["comment"]["user"]["type"] == "Bot":
+        return "Ok"
+
     body = j["comment"]["body"]
     sender = j["sender"]["login"]
+
     perm = client.repos.get_collaborator_permission_level(
         repo["owner"]["login"], repo["name"], sender
     )["permission"]
