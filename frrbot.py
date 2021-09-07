@@ -308,6 +308,11 @@ class FrrPullRequest:
 
         for codefile in pyfiles:
             filename = "{}/{}".format(repodir, codefile["filename"])
+            if not os.path.exists(filename):
+                LOG.warning(
+                    "[+] Skipping pylint on '%s' as it appears removed", filename
+                )
+                continue
             LOG.warning("[+] Running pylint on: %s", filename)
             r = lint.py_run(
                 "{} --persistent=n --disable=all --enable=E -E -r n --disable=import-error".format(
