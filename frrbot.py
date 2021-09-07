@@ -62,22 +62,27 @@ def scheduler_make_id_issue(repo, issue):
     return "{}@@@{}".format(repo["full_name"], issue["id"])
 
 
-def close_issue(repo, issue):
+def close_issue(repo, issue, installation_id):
     """
     Immediately close the named issue
 
     :param dict repo: repository issue is in
     :param dict issue: issue to close
     """
-    LOG.info("[+] Closing issue #%d", issue["number"])
-    client = ghapp.client()
-    client.issues.update(
-        repo["owner"]["login"], repo["name"], issue["number"], state="closed"
+    LOG.info(
+        "[+] Closing issue #%d, installation ID %s", issue["number"], installation_id
     )
-    client.issues.remove_label(repo["owner"]["login"], repo["name"], TRIGGER_LABEL)
+    with app.app_context():
+        client = ghapp.client(installation_id)
+        client.issues.update(
+            repo["owner"]["login"], repo["name"], issue["number"], state="closed"
+        )
+        client.issues.remove_label(
+            repo["owner"]["login"], repo["name"], issue["number"], TRIGGER_LABEL
+        )
 
 
-def schedule_close_issue(repo, issue, when):
+def schedule_close_issue(installation_id, repo, issue, when):
     """
     Schedule an issue to be automatically closed on a certain date.
 
@@ -92,7 +97,7 @@ def schedule_close_issue(repo, issue, when):
     scheduler.add_job(
         close_issue,
         run_date=when,
-        args=[repo, issue],
+        args=[repo, issue, installation_id],
         id=issueid,
         replace_existing=True,
     )
@@ -721,7 +726,7 @@ def issue_labeled():
 
     def label_autoclose():
         closedate = datetime.datetime.now() + datetime.timedelta(weeks=1)
-        schedule_close_issue(repo, issue, closedate)
+        schedule_close_issue(j["installation"]["id"], repo, issue, closedate)
         client.issues.create_comment(
             repo["owner"]["login"], repo["name"], issue["number"], AUTO_CLOSE_MSG
         )
@@ -797,7 +802,7 @@ def issue_comment_created():
 
         closedate = dateparser.parse(arg.strip())
         if closedate is not None and closedate > datetime.datetime.now():
-            schedule_close_issue(repo, issue, closedate)
+            schedule_close_issue(j["installation"]["id"], repo, issue, closedate)
             client.issues.add_labels(
                 repo["owner"]["login"], repo["name"], issue["number"], ["autoclose"]
             )
