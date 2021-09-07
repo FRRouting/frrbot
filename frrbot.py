@@ -238,15 +238,15 @@ def initialize_scheduler():
         )
     }
     scheduler = BackgroundScheduler(jobstores=jobstores)
-    scheduler.start()
     jobs = scheduler.get_jobs()
-    LOG.info("[+] Initialized scheduler")
     LOG.info("[+] Current jobs (%d):", len(jobs))
     for job in jobs:
         LOG.info("ID: %s", job.id)
         LOG.info("\tName: %s", job.name)
         LOG.info("\tFunc: %s", job.func)
         LOG.info("\tWhen: %s", job.next_run_time)
+    scheduler.start()
+    LOG.info("[+] Initialized scheduler")
     return scheduler
 
 
