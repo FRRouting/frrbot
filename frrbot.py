@@ -23,7 +23,7 @@ from flask_githubapplication import GitHubApp
 
 # Global data ------------------------------------------------------------------
 BAD_ISSUE_MSG = "When filing a bug report, please:\n\n- Describe the expected behavior\n- Describe the observed behavior\n\nPlease be sure to provide:\n\n- FRR version\n- OS distribution (e.g. Fedora, OpenBSD)\n- Kernel version (e.g. Linux 5.4)\n\nNeglecting to provide this information makes your issue difficult to address."
-AUTO_CLOSE_MSG = "This issue will be automatically closed in one week unless there is further activity."
+AUTO_CLOSE_MSG = "This issue will be automatically closed in the specified period unless there is further activity."
 NO_AUTO_CLOSE_MSG = "This issue will no longer be automatically closed."
 TRIGGER_LABEL = "autoclose"
 BANNED_FUNCTIONS = [
