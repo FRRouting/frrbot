@@ -214,7 +214,7 @@ def initialize_github(app, config):
     app.config["GITHUBAPP_ROUTE"] = config["gh_app_route"]
 
     try:
-        with open(config["gh_app_pkey_pem_path"]) as keyfile:
+        with open(config["gh_app_pkey_pem_path"], mode="rb") as keyfile:
             app.config["GITHUBAPP_KEY"] = keyfile.read()
     except FileNotFoundError:
         LOG.error(
@@ -319,14 +319,14 @@ class FrrPullRequest:
                 )
                 continue
             LOG.warning("[+] Running pylint on: %s", filename)
-            r = lint.py_run(
+            output = lint.py_run(
                 "{} --persistent=n --disable=all --enable=E -E -r n --disable=import-error".format(
                     filename
                 ),
                 return_std=True,
             )
-            pylint_stdout = r[0].read()
-            pylint_stderr = r[1].read()
+            pylint_stdout = output[0].read()
+            pylint_stderr = output[1].read()
             LOG.warning("stdout: %s", pylint_stdout)
             LOG.warning("stderr: %s", pylint_stderr)
             if pylint_stdout:
