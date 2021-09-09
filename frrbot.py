@@ -18,7 +18,7 @@ from pylint import epylint as lint
 from flask import Flask
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
-from ghapi.all import paged
+from ghapi.all import paged, GhApi
 from flask_githubapplication import GitHubApp
 
 # Global data ------------------------------------------------------------------
@@ -165,6 +165,7 @@ def load_config():
         "gh_app_pkey_pem_path": None,
         "gh_webhook_secret": None,
         "gh_app_id": None,
+        "gh_gist_user_token": None,
         "gh_app_route": None,
         "job_store_path": None,
     }
@@ -276,6 +277,9 @@ try:
 except ConfigNotFoundError as e:
     LOG.error("[!] Error while initializing GitHub App: %s", e)
     sys.exit(2)
+
+# Initialize github gist user
+gistclient = GhApi(token=config["gh_gist_user_token"])
 
 
 # Pull request management ------------------------------------------------------
@@ -582,11 +586,19 @@ Pylint found errors in source files changed by this PR:
                 )
 
             if issues["diff"]["style"]:
+                gist_filename = "style.diff"
+                LOG.info("[+] Uploading gist with style diff")
+                gist = gistclient.gists.create(
+                    files={gist_filename: {"content": issues["diff"]["style"]}}
+                )
+                gist_raw_url = gist["files"][gist_filename]["raw_url"]
+                LOG.info("[+] Uploaded gist with style diff to: %s", gist_raw_url)
                 comment += """
 <details>
 <summary><b>Click for style suggestions</b></summary>
 
 <p>
+
 
 ```diff
 {stylediff}
@@ -595,8 +607,13 @@ Pylint found errors in source files changed by this PR:
 </p>
 </details>
 
+To apply these suggestions:
+```
+curl {stylegist_url} | git apply -
+```
+
 """.format(
-                    stylediff=issues["diff"]["style"]
+                    stylediff=issues["diff"]["style"], stylegist_url=gist_raw_url
                 )
 
         if not issues["diff"]:

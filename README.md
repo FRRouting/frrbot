@@ -62,6 +62,8 @@ Notes for docker:
 * `GH_APP_PKEY_PEM_PATH` should be the absolute path to the PEM format private
   key associated with your GitHub App; you should mount the key into the
   container at that path
+* `GH_GIST_USER_TOKEN` should be a personal access token for a real user. This
+  user will be used to host gists, since GitHub apps can't use gists.
 * Since the job store should outlive the container, you should mount a volume
   where the job store should live from the host into the container before
   running and set `JOB_STORE_PATH` appropriately. For example:
