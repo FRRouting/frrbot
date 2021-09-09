@@ -375,7 +375,7 @@ class FrrPullRequest:
 
         Otherwise returns a dictionary containing various reports on the diff.
         """
-        repodir = "my_frr"
+        repodir = "my_frr-{}".format(os.getpid())
 
         ignore = ["ldpd", "babeld", "nhrpd", "eigrpd"]
 
