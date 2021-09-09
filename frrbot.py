@@ -859,7 +859,7 @@ def issue_comment_created():
 
 
 @ghapp.on("pull_request.synchronize")
-@ghapp.on("pull_request.open")
+@ghapp.on("pull_request.opened")
 def pull_request_opened_or_synchronized():
     """
     Handle a pull request being opened or synchronized.
