@@ -327,8 +327,8 @@ class FrrPullRequest:
             )
             pylint_stdout = output[0].read()
             pylint_stderr = output[1].read()
-            LOG.warning("stdout: %s", pylint_stdout)
-            LOG.warning("stderr: %s", pylint_stderr)
+            LOG.debug("stdout: %s", pylint_stdout)
+            LOG.debug("stderr: %s", pylint_stderr)
             if pylint_stdout:
                 result += "Pylint report for {}:\n{}\n\n".format(
                     filename, pylint_stdout
