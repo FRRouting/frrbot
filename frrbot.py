@@ -717,7 +717,7 @@ curl {stylegist_url} | git apply -
                     labels = labels | set(lbls)
 
                 lines = msg.split("\n")
-                if lines[0].find("fix") != -1 or msg.find("Fixes:") != -1:
+                if lines[0].find(" fix ") != -1 or msg.find("Fixes:") != -1:
                     labels.add("bugfix")
 
         if labels:
