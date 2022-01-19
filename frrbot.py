@@ -483,7 +483,7 @@ class FrrPullRequest:
         commit_pages = paged(
             self.client.pulls.list_commits,
             *self.repo_tuple,
-            self.pull_request["number"]
+            self.pull_request["number"],
         )
 
         for page in commit_pages:
@@ -546,7 +546,7 @@ class FrrPullRequest:
             name="frrbot",
             details_url=self.pull_request["html_url"] + "/checks",
             head_sha=self.pull_request["head"]["sha"],
-            status="in_progress"
+            status="in_progress",
         )
 
         issues = defaultdict(lambda: None)
@@ -647,7 +647,7 @@ curl {stylegist_url} | git apply -
             name="frrbot",
             details_url=self.pull_request["html_url"] + "/checks",
             conclusion=state,
-            output=output
+            output=output,
         )
 
         return comment
@@ -702,7 +702,7 @@ curl {stylegist_url} | git apply -
         commit_pages = paged(
             self.client.pulls.list_commits,
             *self.repo_tuple,
-            self.pull_request["number"]
+            self.pull_request["number"],
         )
         for page in commit_pages:
             for commit in page:
