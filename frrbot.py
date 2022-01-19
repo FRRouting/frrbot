@@ -587,13 +587,32 @@ Pylint found errors in source files changed by this PR:
 
             if issues["diff"]["style"]:
                 gist_filename = "style.diff"
-                LOG.info("[+] Uploading gist with style diff")
-                gist = gistclient.gists.create(
-                    files={gist_filename: {"content": issues["diff"]["style"]}}
+
+                def sizeof_fmt(num, suffix="B"):
+                    for unit in ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"]:
+                        if abs(num) < 1024.0:
+                            return f"{num:3.1f}{unit}{suffix}"
+                        num /= 1024.0
+                    return f"{num:.1f}Yi{suffix}"
+
+                gist_size = sizeof_fmt(len(issues["diff"]["style"]))
+
+                LOG.info(
+                    "[+] Uploading gist with style diff (size: {}".format(gist_size)
                 )
-                gist_raw_url = gist["files"][gist_filename]["raw_url"]
-                LOG.info("[+] Uploaded gist with style diff to: %s", gist_raw_url)
-                comment += """
+                try:
+                    gist = gistclient.gists.create(
+                        files={gist_filename: {"content": issues["diff"]["style"]}}
+                    )
+                    gist_raw_url = gist["files"][gist_filename]["raw_url"]
+                    LOG.info("[+] Uploaded gist with style diff to: %s", gist_raw_url)
+                    # I think the limit is 64kb, but the github docs don't really say
+                    if len(issues["diff"]["style"].encode("utf-8")) > 60000:
+                        comment += "[Style diff]({}) is too large to embed.\n".format(
+                            gist_raw_url
+                        )
+                    else:
+                        comment += """
 <details>
 <summary><b>Click for style suggestions</b></summary>
 
@@ -607,14 +626,21 @@ Pylint found errors in source files changed by this PR:
 </p>
 </details>
 
-To apply these suggestions:
+""".format(
+                            stylediff=issues["diff"]["style"]
+                        )
+                    comment += """
+To apply the style suggestions:
 ```
 curl {stylegist_url} | git apply -
 ```
 
 """.format(
-                    stylediff=issues["diff"]["style"], stylegist_url=gist_raw_url
-                )
+                        stylegist_url=gist_raw_url
+                    )
+                except Exception as e:
+                    LOG.error("[!] Failed to upload gist:\n%s", str(e))
+                    comment += "Error: Failed to upload style gist."
 
         if not issues["diff"]:
             comment += "Style checking failed; check logs\n"
