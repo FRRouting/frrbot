@@ -725,7 +725,6 @@ curl {stylegist_url} | git apply -
         }
 
         labels = set()
-        labels.add(self.pull_request["base"]["ref"])
         commit_pages = paged(
             self.client.pulls.list_commits,
             *self.repo_tuple,
@@ -747,9 +746,10 @@ curl {stylegist_url} | git apply -
                 if lines[0].find(" fix ") != -1 or msg.find("Fixes:") != -1:
                     labels.add("bugfix")
 
-        self.client.issues.add_labels(
-            *self.repo_tuple, self.pull_request["number"], list(labels)
-        )
+        if labels:
+            self.client.issues.add_labels(
+                *self.repo_tuple, self.pull_request["number"], list(labels)
+            )
 
 
 # Webhook handlers -------------------------------------------------------------
