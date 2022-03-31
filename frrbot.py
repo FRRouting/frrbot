@@ -386,7 +386,7 @@ class FrrPullRequest:
         # get repo
         if not os.path.isdir(repodir):
             LOG.warning("[+] Cloning repository")
-            cmd = "git clone {} {}".format(self.repo["git_url"], repodir).split(" ")
+            cmd = "git clone {} {}".format(self.repo["clone_url"], repodir).split(" ")
             subprocess.run(cmd, check=True)
 
         # fetch pr diff
