@@ -132,12 +132,16 @@ dictConfig(
                 "formatter": "default",
             }
         },
-        "root": {"level": "INFO", "handlers": ["wsgi"]},
+        "root": {"level": "DEBUG", "handlers": ["wsgi"]},
     }
 )
 
 app = Flask(__name__)
+app.debug = True
 LOG = flask.logging.create_logger(app)
+
+import flask_githubapplication
+flask_githubapplication.core.LOG = LOG
 
 
 class ConfigNotFoundError(Exception):
