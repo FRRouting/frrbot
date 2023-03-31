@@ -1,0 +1,13 @@
+version: '3'
+services:
+  frrbot:
+    container_name: frrbot
+    build: .
+    env_file: .env
+    environment:
+      - JOB_STORE_PATH=/appdata/jobstore.sqlite
+    restart: unless-stopped
+    volumes:
+      - ./data:/appdata
+    ports:
+      - "127.0.0.1:9091:80"
