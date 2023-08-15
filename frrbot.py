@@ -31,6 +31,7 @@ BANNED_FUNCTIONS = [
     ("strcat", "strlcat"),
     ("strcpy", "strlcpy"),
     ("inet_ntoa", "inet_ntop"),
+    ("ctime", "ctime_r"),
 ]
 
 PR_GREETING_MSG = "Thanks for your contribution to FRR!\n\n"
