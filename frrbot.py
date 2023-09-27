@@ -702,6 +702,7 @@ curl {stylegist_url} | git apply -
             "isisd": "isis",
             "ldpd": "ldp",
             "lib": "libfrr",
+            "mgmtd": "mgmt",
             "nhrpd": "nhrp",
             "ospf6d": "ospfv3",
             "ospfd": "ospf",
