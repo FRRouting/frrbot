@@ -33,6 +33,11 @@ BANNED_FUNCTIONS = [
     ("inet_ntoa", "inet_ntop"),
     ("ctime", "ctime_r"),
 ]
+BANNED_CONTAINER_FUNCTIONS = [
+    "hash_create",
+    "hash_create_size",
+    "list_new",
+]
 
 PR_GREETING_MSG = "Thanks for your contribution to FRR!\n\n"
 PR_WARN_SIGNOFF_MSG = "* One of your commits has a missing or badly formatted `Signed-off-by` line; we can't accept your contribution until all of your commits have one\n"
@@ -43,6 +48,9 @@ PR_WARN_COMMIT_MSG = (
 PR_WARN_BANNED_FUNCTIONS = "* `{}` are banned; please use `{}`\n".format(
     ", ".join([x[0] for x in BANNED_FUNCTIONS]),
     ", ".join([x[1] for x in BANNED_FUNCTIONS]),
+)
+PR_WARN_BANNED_CONTAINER_FUNCTIONS = "* `{}` are banned for new uses; please use typesafe.h (DECLARE_HASH, DECLARE_DLIST, etc.)\n".format(
+    ", ".join([x for x in BANNED_CONTAINER_FUNCTIONS]),
 )
 PR_GUIDELINES_REF_MSG = """
 If you are a new contributor to FRR, please see our [contributing guidelines](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html#coding-practices-style).
@@ -532,12 +540,20 @@ class FrrPullRequest:
             return False
 
         added = [x for x in resp.text.split("\n") if x.startswith("+")]
+        removed = [x for x in resp.text.split("\n") if x.startswith("-")]
+
         banned_regexp = [r"\s{}\(".format(x[0]) for x in BANNED_FUNCTIONS]
         has_banned_functions = any(
             any((re.search(y, x) is not None) for y in banned_regexp) for x in added
         )
 
-        return has_banned_functions
+        banned_container_regexp = [r"\s{}\(".format(x[0]) for x in BANNED_CONTAINER_FUNCTIONS]
+        count_added = len([line for line in added if any((re.search(y, line) is not None) for y in banned_container_regexp)])
+        count_removed = len([line for line in removed if any((re.search(y, line) is not None) for y in banned_container_regexp)])
+
+        has_banned_container_functions = count_added > count_removed
+
+        return (has_banned_functions, has_banned_container_functions)
 
     def check(self):
         """
@@ -557,7 +573,7 @@ class FrrPullRequest:
         issues = defaultdict(lambda: None)
         issues["commits"] = self.check_commits()
         issues["diff"] = self.check_diff()
-        issues["functions"] = self.check_functions()
+        issues["functions"], issues["containers"] = self.check_functions()
 
         comment = ""
         nak = False
@@ -574,6 +590,9 @@ class FrrPullRequest:
                 nak = True
         if issues["functions"]:
             comment += PR_WARN_BANNED_FUNCTIONS
+            nak = True
+        if issues["containers"]:
+            comment += PR_WARN_BANNED_CONTAINER_FUNCTIONS
             nak = True
         if issues["diff"]:
             if issues["diff"]["pylint"]:
